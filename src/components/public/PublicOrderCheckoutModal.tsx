@@ -444,12 +444,38 @@ export const PublicOrderCheckoutModal: React.FC<{ reseller?: any }> = ({ reselle
     setTimeout(() => setIsCopiedPhone(false), 2000);
   };
 
-  // Copy order code helper
-  const handleCopyOrderCode = (code: string) => {
-    navigator.clipboard.writeText(code);
-    setCopiedOrderCode(true);
-    showToast(lang === 'bn' ? 'অর্ডার কোড কপি হয়েছে!' : 'Order code copied!');
-    setTimeout(() => setCopiedOrderCode(false), 2000);
+  // Robust clipboard copy with fallback
+  const handleCopyText = async (textToCopy: string, successMessage: string) => {
+    if (!textToCopy) return;
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(textToCopy);
+        showToast(successMessage, 'success');
+        return;
+      }
+    } catch (e) {
+      console.warn('Clipboard API error, attempting fallback:', e);
+    }
+
+    try {
+      const textarea = document.createElement('textarea');
+      textarea.value = textToCopy;
+      textarea.style.position = 'fixed';
+      textarea.style.left = '-99999px';
+      textarea.style.top = '-99999px';
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      const copied = document.execCommand('copy');
+      document.body.removeChild(textarea);
+      if (copied) {
+        showToast(successMessage, 'success');
+      } else {
+        showToast(lang === 'bn' ? 'কপি করতে ব্যর্থ হয়েছে।' : 'Copy failed.', 'error');
+      }
+    } catch (err) {
+      showToast(lang === 'bn' ? 'কপি করতে সমস্যা হয়েছে।' : 'Failed to copy.', 'error');
+    }
   };
 
   if (!isCheckoutModalOpen) return null;
@@ -461,7 +487,7 @@ export const PublicOrderCheckoutModal: React.FC<{ reseller?: any }> = ({ reselle
       {/* 1. ORDER SUCCESS CONFIRMATION RECEIPT                           */}
       {/* ------------------------------------------------------------- */}
       {confirmedOrder ? (
-        <div className="bg-white w-full h-full sm:h-auto sm:max-h-[92vh] max-w-xl sm:rounded-3xl rounded-none shadow-2xl overflow-hidden flex flex-col border border-emerald-200 animate-in zoom-in-95 duration-200 my-auto">
+        <div className="bg-white w-full h-full sm:h-auto sm:max-h-[92vh] max-w-xl rounded-none sm:rounded-3xl shadow-2xl overflow-hidden flex flex-col border-0 sm:border border-emerald-200 animate-in zoom-in-95 duration-200 my-auto">
           {/* Header */}
           <div className="bg-gradient-to-r from-[#009245] to-[#006e34] text-white px-4 py-3 sm:px-5 sm:py-3.5 flex items-center justify-between relative shrink-0">
             <div className="flex items-center gap-2.5">
@@ -470,13 +496,8 @@ export const PublicOrderCheckoutModal: React.FC<{ reseller?: any }> = ({ reselle
               </div>
               <div>
                 <h3 className="text-sm sm:text-base font-black leading-tight">
-                  {lang === 'bn' ? 'অর্ডার সফলভাবে গ্রহণ করা হয়েছে!' : 'Order Successfully Placed!'}
+                  {lang === 'bn' ? 'আপনার অর্ডারটি পেন্ডিং আছে' : 'Your Order is Pending'}
                 </h3>
-                <p className="text-[11px] text-emerald-100">
-                  {lang === 'bn'
-                    ? `অর্ডারটি কনফার্ম করতে WhatsApp-এ এসএমএস দিন: ${brandSettings?.whatsappNumber || brandSettings?.helplinePhone || '01800000000'}`
-                    : `Confirm order via WhatsApp: ${brandSettings?.whatsappNumber || brandSettings?.helplinePhone || '01800000000'}`}
-                </p>
               </div>
             </div>
 
@@ -491,19 +512,39 @@ export const PublicOrderCheckoutModal: React.FC<{ reseller?: any }> = ({ reselle
           </div>
 
           {/* Receipt Body */}
-          <div className="p-3.5 sm:p-5 space-y-3.5 overflow-y-auto flex-1 scrollbar-none">
-            {/* Important Fast Delivery WhatsApp Notice Box moved to top */}
-            <div className="p-3 bg-gradient-to-r from-emerald-50 via-green-50 to-emerald-50 border border-emerald-300 rounded-2xl shadow-2xs space-y-1 text-xs text-slate-800">
-              <div className="flex items-center gap-2 font-black text-[#009245]">
-                <Sparkles className="w-4 h-4 text-emerald-600 shrink-0" />
-                <span>{lang === 'bn' ? 'দ্রুত ডেলিভারি পেতে বিশেষ নির্দেশনা:' : 'Fast Delivery Instruction:'}</span>
-              </div>
-              <p className="text-[11.5px] sm:text-xs text-slate-700 leading-relaxed font-medium">
-                {lang === 'bn'
-                  ? 'আপনার অর্ডারটি দ্রুততম সময়ে কনফার্ম করতে এবং সবার আগে দ্রুত ডেলিভারি পেতে এখনই নিচের হোয়াটসঅ্যাপ বাটনে ক্লিক করে আমাদের সাথে চ্যাটে অর্ডারটি পাঠিয়ে দিন!'
-                  : 'To get your order confirmed and dispatched much faster, click the WhatsApp button below to send your order details directly!'}
-              </p>
-            </div>
+          <div className="p-3.5 sm:p-5 space-y-3 overflow-y-auto flex-1 scrollbar-none">
+            {/* Concise Order Status Instruction & Dynamic Admin WhatsApp Number */}
+            {(() => {
+              const displayPhone = brandSettings?.whatsappNumber || brandSettings?.helplinePhone || reseller?.storeWhatsapp || reseller?.phone || '01800000000';
+              const cleanPhone = displayPhone.replace(/[^0-9]/g, '');
+              const formattedPhone = cleanPhone.length === 11 ? cleanPhone : (cleanPhone.startsWith('880') ? cleanPhone.slice(2) : displayPhone);
+
+              return (
+                <div className="p-3 bg-amber-50/90 border border-amber-200/90 rounded-2xl space-y-1.5 text-xs text-slate-800 shadow-3xs">
+                  <p className="text-[11.5px] sm:text-xs text-slate-700 leading-relaxed font-semibold">
+                    {lang === 'bn'
+                      ? 'অর্ডার কনফার্ম করতে নিচের WhatsApp বাটনে মেসেজ দিন। কনফার্মেশন না পাওয়া পর্যন্ত অর্ডারটি পেন্ডিং থাকবে।'
+                      : 'To confirm your order, send a message to the WhatsApp button below. The order will remain pending until confirmed.'}
+                  </p>
+                  <div className="flex items-center justify-between bg-white px-2.5 py-1.5 rounded-xl border border-amber-200/70">
+                    <div className="flex items-center gap-2">
+                      <MessageCircle className="w-4 h-4 text-[#009245]" />
+                      <span className="text-[11px] text-slate-600 font-bold">
+                        {lang === 'bn' ? 'হটলাইন:' : 'Hotline:'}
+                      </span>
+                      <span className="text-xs font-mono font-black text-slate-900">{formattedPhone}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleCopyText(formattedPhone, lang === 'bn' ? 'নম্বর কপি হয়েছে!' : 'Number copied!')}
+                      className="px-2 py-0.5 bg-amber-100 hover:bg-amber-200 text-amber-900 rounded-lg text-[10px] font-bold transition-colors cursor-pointer active:scale-95"
+                    >
+                      কপি
+                    </button>
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* Customer Details */}
             <div className="bg-slate-50 rounded-2xl p-3 border border-slate-200/80 text-xs space-y-1 text-slate-700">
@@ -577,10 +618,10 @@ export const PublicOrderCheckoutModal: React.FC<{ reseller?: any }> = ({ reselle
                       <button
                         type="button"
                         onClick={() => {
-                          navigator.clipboard.writeText(it.productCode || 'TNX');
-                          showToast(lang === 'bn' ? `কোড (${it.productCode}) কপি হয়েছে✓` : `Code (${it.productCode}) copied✓`, 'success');
+                          const code = it.productCode || 'TNX';
+                          handleCopyText(code, lang === 'bn' ? `কোড (${code}) কপি হয়েছে✓` : `Code (${code}) copied✓`);
                         }}
-                        className="px-2 py-1 bg-white hover:bg-emerald-50 text-slate-700 hover:text-[#009245] border border-slate-200 rounded-lg text-[10.5px] font-mono font-bold inline-flex items-center gap-1 transition-colors cursor-pointer shadow-3xs"
+                        className="px-2 py-1 bg-white hover:bg-emerald-50 text-slate-700 hover:text-[#009245] border border-slate-200 rounded-lg text-[10.5px] font-mono font-bold inline-flex items-center gap-1 transition-colors cursor-pointer shadow-3xs active:scale-95"
                         title={lang === 'bn' ? 'প্রোডাক্ট কোড কপি করুন' : 'Copy product code'}
                       >
                         <Copy className="w-3 h-3 text-[#009245]" />
@@ -591,10 +632,9 @@ export const PublicOrderCheckoutModal: React.FC<{ reseller?: any }> = ({ reselle
                         type="button"
                         onClick={() => {
                           const productUrl = `${window.location.origin}/#product-${it.productId}`;
-                          navigator.clipboard.writeText(productUrl);
-                          showToast(lang === 'bn' ? 'প্রোডাক্ট লিংক কপি হয়েছে✓' : 'Product link copied✓', 'success');
+                          handleCopyText(productUrl, lang === 'bn' ? 'প্রোডাক্ট লিংক কপি হয়েছে✓' : 'Product link copied✓');
                         }}
-                        className="px-2 py-1 bg-white hover:bg-emerald-50 text-slate-700 hover:text-[#009245] border border-slate-200 rounded-lg text-[10.5px] font-bold inline-flex items-center gap-1 transition-colors cursor-pointer shadow-3xs"
+                        className="px-2 py-1 bg-white hover:bg-emerald-50 text-slate-700 hover:text-[#009245] border border-slate-200 rounded-lg text-[10.5px] font-bold inline-flex items-center gap-1 transition-colors cursor-pointer shadow-3xs active:scale-95"
                         title={lang === 'bn' ? 'প্রোডাক্ট লিংক কপি করুন' : 'Copy product link'}
                       >
                         <Copy className="w-3 h-3 text-[#009245]" />
