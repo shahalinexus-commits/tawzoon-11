@@ -245,6 +245,24 @@ export const PublicStorefront: React.FC = () => {
 
   const isSearchActive = Boolean(publicSearch && publicSearch.trim().length > 0);
 
+  // If viewing a product, render dedicated Product Details / Order Page!
+  if (viewingProduct) {
+    const activeList = sortedAndFilteredProducts.length > 0 ? sortedAndFilteredProducts : products;
+    return (
+      <div className="min-h-screen bg-[#fafaf9] text-slate-900 pb-20">
+        <ProductDetailsPage
+          product={viewingProduct}
+          onBack={() => setViewingProduct(null)}
+          categoryProducts={activeList}
+          onSelectRelated={(prod) => {
+            setViewingProduct(prod);
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }}
+        />
+      </div>
+    );
+  }
+
   // If notifications view is active
   if (publicCategory.toLowerCase() === 'notifications') {
     return <PublicNotificationsView />;
@@ -335,23 +353,6 @@ export const PublicStorefront: React.FC = () => {
     );
   }
 
-  // If viewing a product, render dedicated Product Details / Order Page!
-  if (viewingProduct) {
-    const activeList = sortedAndFilteredProducts.length > 0 ? sortedAndFilteredProducts : products;
-    return (
-      <div className="min-h-screen bg-[#fafaf9] text-slate-900 pb-20">
-        <ProductDetailsPage
-          product={viewingProduct}
-          onBack={() => setViewingProduct(null)}
-          categoryProducts={activeList}
-          onSelectRelated={(prod) => {
-            setViewingProduct(prod);
-            window.scrollTo({ top: 0, behavior: 'smooth' });
-          }}
-        />
-      </div>
-    );
-  }
 
   // Split into "Popular Products" (top 5) and "Important / Essential Products"
   const popularProducts = inPageTab === 'wishlist'
