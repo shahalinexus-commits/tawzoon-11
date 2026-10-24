@@ -9,12 +9,18 @@ export const UserBottomNav: React.FC = () => {
     setActivePortal,
     publicCategory,
     setPublicCategory,
+    publicSearch,
+    setPublicSearch,
+    selectedPublicSubcategory,
+    setSelectedPublicSubcategory,
+    refreshBootstrap,
     showToast,
     setSelectedProduct,
     resellerTab,
     setResellerTab,
     isEmployeeAuthenticated,
     cartItems,
+    isPublicCartOpen,
     setIsPublicCartOpen,
     wishlistItems,
   } = useApp();
@@ -28,9 +34,16 @@ export const UserBottomNav: React.FC = () => {
 
   const handleNavClick = (type: 'home' | 'dashboard' | 'orders' | 'cart' | 'profile') => {
     // Close global product details modal when navigating
-    setSelectedProduct(null);
+    if (setSelectedProduct) setSelectedProduct(null);
 
     if (type === 'home') {
+      if (setPublicSearch) setPublicSearch('');
+      if (setSelectedPublicSubcategory) setSelectedPublicSubcategory(null);
+      if (setIsPublicCartOpen) setIsPublicCartOpen(false);
+      if (refreshBootstrap) {
+        refreshBootstrap().catch(() => {});
+      }
+
       if (isEmployeeAuthenticated) {
         setActivePortal('employee');
         setResellerTab('catalog');
@@ -39,6 +52,7 @@ export const UserBottomNav: React.FC = () => {
       } else {
         setActivePortal('public');
         setPublicCategory('all');
+        window.dispatchEvent(new CustomEvent('tawzoon_nav_home'));
         window.scrollTo({ top: 0, behavior: 'smooth' });
       }
     } else if (type === 'dashboard') {
@@ -76,11 +90,11 @@ export const UserBottomNav: React.FC = () => {
     }
   };
 
-  const isHomeActive = isReseller ? resellerTab === 'catalog' : (activePortal === 'public' && publicCategory !== 'wishlist' && publicCategory !== 'shop_tab');
-  const isDashboardActive = isReseller ? resellerTab === 'dashboard' : (activePortal === 'public' && publicCategory === 'shop_tab');
-  const isCartActive = isReseller && resellerTab === 'cart';
-  const isOrdersActive = isReseller ? resellerTab === 'orders' : (activePortal === 'public' && publicCategory === 'wishlist');
-  const isProfileActive = isReseller && (resellerTab === 'profile' || resellerTab === 'withdrawal' || resellerTab === 'earnings');
+  const isCartActive = isReseller ? resellerTab === 'cart' : Boolean(isPublicCartOpen);
+  const isOrdersActive = !isCartActive && (isReseller ? resellerTab === 'orders' : (activePortal === 'public' && publicCategory === 'wishlist'));
+  const isDashboardActive = !isCartActive && !isOrdersActive && (isReseller ? resellerTab === 'dashboard' : (activePortal === 'public' && publicCategory === 'shop_tab'));
+  const isProfileActive = !isCartActive && !isOrdersActive && !isDashboardActive && (isReseller && (resellerTab === 'profile' || resellerTab === 'withdrawal' || resellerTab === 'earnings'));
+  const isHomeActive = !isCartActive && !isOrdersActive && !isDashboardActive && !isProfileActive && (isReseller ? resellerTab === 'catalog' : (activePortal === 'public' && publicCategory !== 'wishlist' && publicCategory !== 'shop_tab'));
 
   return (
     <nav

@@ -515,9 +515,12 @@ export const PublicOrderCheckoutModal: React.FC<{ reseller?: any }> = ({ reselle
           <div className="p-3.5 sm:p-5 space-y-3 overflow-y-auto flex-1 scrollbar-none">
             {/* Concise Order Status Instruction & Dynamic Admin WhatsApp Number */}
             {(() => {
-              const displayPhone = brandSettings?.whatsappNumber || brandSettings?.helplinePhone || reseller?.storeWhatsapp || reseller?.phone || '01800000000';
-              const cleanPhone = displayPhone.replace(/[^0-9]/g, '');
-              const formattedPhone = cleanPhone.length === 11 ? cleanPhone : (cleanPhone.startsWith('880') ? cleanPhone.slice(2) : displayPhone);
+              const displayPhone = brandSettings?.helplinePhone || brandSettings?.publicContactNumber || brandSettings?.whatsappNumber || reseller?.storeWhatsapp || reseller?.phone || '01800000000';
+              let cleanPhone = displayPhone.replace(/[^0-9]/g, '');
+              if (cleanPhone.startsWith('880') && cleanPhone.length === 13) {
+                cleanPhone = cleanPhone.slice(2);
+              }
+              const formattedPhone = cleanPhone.length === 11 ? cleanPhone : displayPhone;
 
               return (
                 <div className="p-3 bg-amber-50/90 border border-amber-200/90 rounded-2xl space-y-1.5 text-xs text-slate-800 shadow-3xs">
@@ -664,9 +667,13 @@ export const PublicOrderCheckoutModal: React.FC<{ reseller?: any }> = ({ reselle
 
             {/* Action Buttons: WhatsApp Direct Message Only */}
             {(() => {
-              const resellerWhatsapp = reseller?.storeWhatsapp || reseller?.phone || brandSettings?.whatsappNumber || brandSettings?.helplinePhone || '01800000000';
-              const cleanWhatsapp = resellerWhatsapp.replace(/[^0-9]/g, '');
-              const formattedWhatsapp = cleanWhatsapp.startsWith('88') ? cleanWhatsapp : `88${cleanWhatsapp}`;
+              const targetWhatsapp = brandSettings?.whatsappNumber || reseller?.storeWhatsapp || reseller?.phone || brandSettings?.helplinePhone || '01800000000';
+              let cleanWhatsapp = targetWhatsapp.replace(/[^0-9]/g, '');
+              if (cleanWhatsapp.startsWith('0')) {
+                cleanWhatsapp = '88' + cleanWhatsapp;
+              } else if (!cleanWhatsapp.startsWith('88') && cleanWhatsapp.length === 10) {
+                cleanWhatsapp = '88' + cleanWhatsapp;
+              }
 
               const itemsText = confirmedOrder.items.map((it: any, i: number) => 
                 `📌 *পণ্য #${i + 1}:* ${it.productName}\n` +
@@ -694,7 +701,9 @@ ${itemsText}
 
 ✅ আসসালামু আলাইকুম, আমি ওয়েবসাইট থেকে এই অর্ডারটি কনফার্ম করেছি। দয়া করে অর্ডারটি দ্রুত কুরিয়ারে পাঠিয়ে দিন।`;
 
-              const waLink = `https://wa.me/${formattedWhatsapp}?text=${encodeURIComponent(waText)}`;
+              const waLink = targetWhatsapp.startsWith('http')
+                ? (targetWhatsapp.includes('text=') ? targetWhatsapp : `${targetWhatsapp}${targetWhatsapp.includes('?') ? '&' : '?'}text=${encodeURIComponent(waText)}`)
+                : `https://wa.me/${cleanWhatsapp}?text=${encodeURIComponent(waText)}`;
 
               return (
                 <div className="pt-1">

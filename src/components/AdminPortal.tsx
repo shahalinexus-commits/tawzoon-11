@@ -61,6 +61,7 @@ import {
   Globe,
   Search,
   Lock,
+  Clock,
 } from 'lucide-react';
 import { extractYouTubeId, getYouTubeThumbnail, getYouTubeEmbedUrl } from '../utils/youtube.js';
 import { ProductCard } from './ProductCard.js';
@@ -248,6 +249,13 @@ export const AdminPortal: React.FC = () => {
   const [paymentSettings, setPaymentSettings] = useState<PaymentSetting[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLogItem[]>([]);
   const [trainingVideos, setTrainingVideos] = useState<any[]>([]);
+
+  // Admin Live Notification Broadcast States
+  const [notifTarget, setNotifTarget] = useState<'PUBLIC' | 'EMPLOYEE' | 'ALL'>('PUBLIC');
+  const [notifTitle, setNotifTitle] = useState('');
+  const [notifMessage, setNotifMessage] = useState('');
+  const [isSendingNotif, setIsSendingNotif] = useState(false);
+  const [allNotifications, setAllNotifications] = useState<NotificationItem[]>([]);
 
   // Training Modal & Form
   const [isTrainingModalOpen, setIsTrainingModalOpen] = useState(false);
@@ -828,11 +836,33 @@ export const AdminPortal: React.FC = () => {
     }
   };
 
+  const loadAllNotifications = async () => {
+    if (!adminToken) return;
+    try {
+      const list = await api.adminGetAllNotifications(adminToken);
+      if (Array.isArray(list)) setAllNotifications(list);
+    } catch {}
+  };
+
   useEffect(() => {
     if (isAdminAuthenticated && adminToken) {
       loadAdminData();
     }
   }, [isAdminAuthenticated, adminToken]);
+
+  useEffect(() => {
+    if (isAdminAuthenticated && adminToken && ['notifications', 'notif_public', 'notif_reseller'].includes(activeTab)) {
+      loadAllNotifications();
+    }
+  }, [activeTab, adminToken, isAdminAuthenticated]);
+
+  useEffect(() => {
+    const handleAdminNav = (e: any) => {
+      if (e.detail) setActiveTab(e.detail);
+    };
+    window.addEventListener('admin_nav_tab', handleAdminNav);
+    return () => window.removeEventListener('admin_nav_tab', handleAdminNav);
+  }, []);
 
   // Real-time Live Event listener
   useRealtimeEvents((event) => {
@@ -2029,10 +2059,73 @@ export const AdminPortal: React.FC = () => {
       } else {
         setBrandSettings(branding);
       }
-      showToast(lang === 'bn' ? 'ব্র্যান্ডিং ও লোগোর পরিবর্তন সফলভাবে সংরক্ষণ হয়েছে!' : 'Branding updated successfully!');
+      showToast(lang === 'bn' ? 'ব্র্যান্ডিং ও নোটিফিকেশনের পরিবর্তন সফলভাবে সংরক্ষণ হয়েছে!' : 'Branding updated successfully!');
       await refreshBootstrap();
     } catch (err: any) {
       showToast(err.message || 'Branding update failed', 'error');
+    }
+  };
+
+  // Live Notification Dispatchers
+  const handleSendLiveNotification = async (
+    customTarget?: 'PUBLIC' | 'EMPLOYEE' | 'ALL',
+    customTitle?: string,
+    customMsg?: string
+  ) => {
+    if (!adminToken) return;
+    const target = customTarget || notifTarget;
+    const defaultTitle = target === 'PUBLIC' 
+      ? 'পাবলিক ওয়েবসাইট অফার ও জরুরি নোটিশ' 
+      : target === 'EMPLOYEE' 
+      ? 'রিসেলার ড্যাশবোর্ড গুরুত্বপূর্ণ নোটিশ' 
+      : 'জরুরি লাইভ নোটিশ ও ঘোষণা';
+    const title = (customTitle || notifTitle).trim() || defaultTitle;
+    const msg = (customMsg || notifMessage).trim();
+
+    if (!msg) {
+      showToast(lang === 'bn' ? 'দয়া করে নোটিফিকেশনের বার্তা লিখুন' : 'Please enter notification message', 'error');
+      return;
+    }
+
+    setIsSendingNotif(true);
+    try {
+      const res = await api.adminSendNotification(adminToken, {
+        recipientRole: target,
+        titleBn: title,
+        titleEn: title,
+        messageBn: msg,
+        messageEn: msg,
+        type: 'ANNOUNCEMENT'
+      });
+
+      if (res && res.success) {
+        showToast(
+          lang === 'bn'
+            ? `${target === 'PUBLIC' ? 'পাবলিক ওয়েবসাইটে' : target === 'EMPLOYEE' ? 'রিসেলার ড্যাশবোর্ডে' : 'সকল প্ল্যাটফর্মে'} রিয়েল-টাইমে নোটিফিকেশন পাঠানো হয়েছে!`
+            : 'Live notification dispatched successfully!',
+          'success'
+        );
+        if (!customMsg) {
+          setNotifTitle('');
+          setNotifMessage('');
+        }
+        await loadAllNotifications();
+      }
+    } catch (err: any) {
+      showToast(err.message || 'Failed to send notification', 'error');
+    } finally {
+      setIsSendingNotif(false);
+    }
+  };
+
+  const handleDeleteNotification = async (id: string) => {
+    if (!adminToken) return;
+    try {
+      await api.adminDeleteNotification(adminToken, id);
+      setAllNotifications(prev => prev.filter(n => n.id !== id));
+      showToast(lang === 'bn' ? 'নোটিফিকেশন সফলভাবে মুছে ফেলা হয়েছে' : 'Notification deleted');
+    } catch (err: any) {
+      showToast(err.message || 'Failed to delete notification', 'error');
     }
   };
 
@@ -5489,24 +5582,325 @@ export const AdminPortal: React.FC = () => {
         {/* TAB 7: BRANDING & BANNER MANAGEMENT (BEAUTIFULLY ORGANIZED) */}
         {(['branding', 'public_section', 'public_banners', 'public_whatsapp', 'public_notice', 'reseller_support'].includes(activeTab)) && branding && (
           <div className="space-y-6 max-w-4xl">
-            {/* Single Line Header with Title and Save Button */}
-            <div className="flex items-center justify-between gap-3 bg-white px-5 py-3.5 rounded-2xl border border-slate-200/80 shadow-xs">
-              <h2 className="text-base sm:text-lg font-black text-slate-900 tracking-tight flex items-center gap-2">
-                <Settings className="w-5 h-5 text-[#009245]" />
-                <span>{lang === 'bn' ? 'ব্যানার ও ব্রুন্ডিং নিয়ন্ত্রণ' : 'Branding & Banner Management'}</span>
-              </h2>
+            {activeTab === 'public_whatsapp' ? (
+              /* DEDICATED WHATSAPP & CONTACT SETTINGS PAGE ONLY */
+              <div className="space-y-6">
+                {/* Header Bar */}
+                <div className="flex items-center justify-between gap-3 bg-white px-5 py-4 rounded-2xl border border-slate-200/80 shadow-xs">
+                  <div>
+                    <h2 className="text-base sm:text-lg font-black text-slate-900 tracking-tight flex items-center gap-2">
+                      <Settings className="w-5 h-5 text-[#009245]" />
+                      <span>{lang === 'bn' ? 'হোয়াটসঅ্যাপ ও কন্টাক্ট কনফিগারেশন' : 'WhatsApp & Contact Settings'}</span>
+                    </h2>
+                    <p className="text-xs text-slate-500 font-medium mt-0.5">
+                      পাবলিক ওয়েবসাইট এবং রিসেলার প্যানেলের কন্টাক্ট, হটলাইন ও হোয়াটসঅ্যাপ নম্বর পৃথকভাবে নিয়ন্ত্রণ করুন
+                    </p>
+                  </div>
 
-              <button
-                type="button"
-                onClick={handleSaveBranding}
-                className="px-4 py-2 bg-[#009245] hover:bg-[#007a38] text-white text-xs font-black rounded-xl shadow-xs transition-all hover:scale-105 flex items-center gap-1.5 cursor-pointer shrink-0"
-              >
-                <Check className="w-4 h-4" />
-                <span>{lang === 'bn' ? '💾 পরিবর্তন সংরক্ষণ করুন' : 'Save Changes'}</span>
-              </button>
-            </div>
+                  <button
+                    type="button"
+                    onClick={() => handleSaveBranding()}
+                    className="px-4 py-2 bg-[#009245] hover:bg-[#007a38] text-white text-xs font-black rounded-xl shadow-xs transition-all hover:scale-105 flex items-center gap-1.5 cursor-pointer shrink-0"
+                  >
+                    <Check className="w-4 h-4" />
+                    <span>{lang === 'bn' ? '💾 পরিবর্তন সংরক্ষণ করুন' : 'Save Changes'}</span>
+                  </button>
+                </div>
 
-            <form onSubmit={handleSaveBranding} className="space-y-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {/* 1. PUBLIC WEBSITE CONTACT SETTINGS */}
+                  <div className="bg-white rounded-2xl border-2 border-emerald-400 shadow-sm overflow-hidden flex flex-col justify-between">
+                    <div>
+                      <div className="p-4 sm:p-5 bg-gradient-to-r from-emerald-600 via-[#009245] to-emerald-700 text-white flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className="w-9 h-9 rounded-xl bg-white text-[#009245] flex items-center justify-center font-black text-base shadow-xs">
+                            🌐
+                          </div>
+                          <div>
+                            <h3 className="text-base font-black tracking-wide">
+                              {lang === 'bn' ? '১. পাবলিক ওয়েবসাইট কন্টাক্ট' : '1. Public Website Contact'}
+                            </h3>
+                            <p className="text-xs text-emerald-100">
+                              পাবলিক স্টোর পেজ, কাস্টমার চ্যাট ও অর্ডার কনফার্মেশনে দেখাবে
+                            </p>
+                          </div>
+                        </div>
+                        <span className="text-[11px] font-black text-[#009245] bg-white px-2.5 py-1 rounded-full">
+                          Public Store
+                        </span>
+                      </div>
+
+                      <div className="p-5 space-y-4">
+                        {/* Connection Status Indicator */}
+                        <div className={`p-3 rounded-xl border flex items-center justify-between gap-2 ${
+                          branding.whatsappNumber && branding.whatsappNumber.trim() !== ''
+                            ? 'bg-emerald-50 border-emerald-300 text-emerald-900'
+                            : 'bg-amber-50 border-amber-300 text-amber-900'
+                        }`}>
+                          <div className="flex items-center gap-2">
+                            <span className="relative flex h-2.5 w-2.5">
+                              {branding.whatsappNumber && branding.whatsappNumber.trim() !== '' ? (
+                                <>
+                                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+                                </>
+                              ) : (
+                                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500"></span>
+                              )}
+                            </span>
+                            <span className="text-xs font-bold">
+                              {branding.whatsappNumber && branding.whatsappNumber.trim() !== ''
+                                ? '🟢 সংযুক্ত (Connected)'
+                                : '🔴 বিচ্ছিন্ন (Disconnected)'}
+                            </span>
+                          </div>
+                          {branding.whatsappNumber && (
+                            <span className="text-xs font-mono font-bold text-emerald-800 bg-white px-2 py-0.5 rounded border border-emerald-200">
+                              {branding.whatsappNumber}
+                            </span>
+                          )}
+                        </div>
+
+                        {/* 1. Public WhatsApp Number */}
+                        <div className="space-y-1.5">
+                          <label className="text-xs font-black text-slate-800 block flex items-center justify-between">
+                            <span>WhatsApp Number *</span>
+                            <span className="text-[10px] text-emerald-700 font-bold">পাবলিক হোয়াটসঅ্যাপ চ্যাট</span>
+                          </label>
+                          <input
+                            type="text"
+                            value={branding.whatsappNumber || ''}
+                            onChange={(e) => setBranding({ ...branding, whatsappNumber: e.target.value })}
+                            placeholder="যেমন: 01700000000 বা https://wa.me/8801700000000"
+                            className="w-full px-3.5 py-2.5 text-xs bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:border-[#009245] outline-none font-mono text-slate-900 font-bold shadow-2xs"
+                          />
+                          <p className="text-[10.5px] text-slate-500">
+                            পাবলিক ওয়েবসাইটে কাস্টমার "হোয়াটসঅ্যাপে সরাসরি অর্ডারটি পাঠান" ক্লিক করলে এই নম্বরটিতে চ্যাট খুলবে।
+                          </p>
+                        </div>
+
+                        {/* 2. Public Contact Number */}
+                        <div className="space-y-1.5">
+                          <label className="text-xs font-black text-slate-800 block flex items-center justify-between">
+                            <span>Contact Number</span>
+                            <span className="text-[10px] text-slate-500">সাধারণ কন্টাক্ট নম্বর</span>
+                          </label>
+                          <input
+                            type="text"
+                            value={branding.publicContactNumber || ''}
+                            onChange={(e) => setBranding({ ...branding, publicContactNumber: e.target.value })}
+                            placeholder="যেমন: 01700000000"
+                            className="w-full px-3.5 py-2.5 text-xs bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:border-[#009245] outline-none font-mono text-slate-900 font-bold shadow-2xs"
+                          />
+                          <p className="text-[10.5px] text-slate-500">
+                            পাবলিক স্টোরের যোগাযোগ তথ্যে প্রদর্শিত ফোন নম্বর।
+                          </p>
+                        </div>
+
+                        {/* 3. Public Hotline Number */}
+                        <div className="space-y-1.5">
+                          <label className="text-xs font-black text-slate-800 block flex items-center justify-between">
+                            <span>Hotline Number</span>
+                            <span className="text-[10px] text-emerald-700 font-bold">কল সেন্টার হটলাইন</span>
+                          </label>
+                          <input
+                            type="text"
+                            value={branding.helplinePhone || ''}
+                            onChange={(e) => setBranding({ ...branding, helplinePhone: e.target.value })}
+                            placeholder="যেমন: 01800000000"
+                            className="w-full px-3.5 py-2.5 text-xs bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:border-[#009245] outline-none font-mono text-slate-900 font-bold shadow-2xs"
+                          />
+                          <p className="text-[10.5px] text-slate-500">
+                            পাবলিক অর্ডার পপআপ ও হেডারের হটলাইন ফিল্ডে প্রদর্শিত হবে।
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Public Action Buttons */}
+                    <div className="p-4 bg-emerald-50/60 border-t border-emerald-100 flex flex-wrap items-center justify-between gap-2">
+                      {branding.whatsappNumber ? (
+                        <a
+                          href={
+                            branding.whatsappNumber.startsWith('http')
+                              ? branding.whatsappNumber
+                              : `https://wa.me/${branding.whatsappNumber.replace(/[^0-9]/g, '')}`
+                          }
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-3 py-2 bg-emerald-100 hover:bg-emerald-200 text-emerald-900 text-xs font-extrabold rounded-xl border border-emerald-300 transition-all cursor-pointer"
+                        >
+                          🧪 চ্যাট টেস্ট করুন
+                        </a>
+                      ) : <div />}
+
+                      <button
+                        type="button"
+                        onClick={() => handleSaveBranding()}
+                        className="px-4 py-2 bg-[#009245] hover:bg-[#007a38] text-white text-xs font-bold rounded-xl shadow-xs transition-all cursor-pointer"
+                      >
+                        💾 পাবলিক কন্টাক্ট সেভ করুন
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 2. RESELLER PANEL CONTACT SETTINGS */}
+                  <div className="bg-white rounded-2xl border-2 border-sky-400 shadow-sm overflow-hidden flex flex-col justify-between">
+                    <div>
+                      <div className="p-4 sm:p-5 bg-gradient-to-r from-sky-600 to-blue-700 text-white flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className="w-9 h-9 rounded-xl bg-white text-sky-700 flex items-center justify-center font-black text-base shadow-xs">
+                            👥
+                          </div>
+                          <div>
+                            <h3 className="text-base font-black tracking-wide">
+                              {lang === 'bn' ? '২. রিসেলার প্যানেল কন্টাক্ট' : '2. Reseller Panel Contact'}
+                            </h3>
+                            <p className="text-xs text-sky-100">
+                              রিসেলার ড্যাশবোর্ড, সাপোর্ট ট্যাব ও পেমেন্ট সেকশনে দেখাবে
+                            </p>
+                          </div>
+                        </div>
+                        <span className="text-[11px] font-black text-sky-700 bg-white px-2.5 py-1 rounded-full">
+                          Reseller Portal
+                        </span>
+                      </div>
+
+                      <div className="p-5 space-y-4">
+                        {/* Connection Status Indicator */}
+                        <div className={`p-3 rounded-xl border flex items-center justify-between gap-2 ${
+                          branding.resellerWhatsappNumber && branding.resellerWhatsappNumber.trim() !== ''
+                            ? 'bg-sky-50 border-sky-300 text-sky-900'
+                            : 'bg-amber-50 border-amber-300 text-amber-900'
+                        }`}>
+                          <div className="flex items-center gap-2">
+                            <span className="relative flex h-2.5 w-2.5">
+                              {branding.resellerWhatsappNumber && branding.resellerWhatsappNumber.trim() !== '' ? (
+                                <>
+                                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sky-400 opacity-75"></span>
+                                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-sky-500"></span>
+                                </>
+                              ) : (
+                                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500"></span>
+                              )}
+                            </span>
+                            <span className="text-xs font-bold">
+                              {branding.resellerWhatsappNumber && branding.resellerWhatsappNumber.trim() !== ''
+                                ? '🟢 সংযুক্ত (Connected)'
+                                : '🔴 বিচ্ছিন্ন (Disconnected)'}
+                            </span>
+                          </div>
+                          {branding.resellerWhatsappNumber && (
+                            <span className="text-xs font-mono font-bold text-sky-800 bg-white px-2 py-0.5 rounded border border-sky-200">
+                              {branding.resellerWhatsappNumber}
+                            </span>
+                          )}
+                        </div>
+
+                        {/* 1. Reseller WhatsApp Number */}
+                        <div className="space-y-1.5">
+                          <label className="text-xs font-black text-slate-800 block flex items-center justify-between">
+                            <span>WhatsApp Number *</span>
+                            <span className="text-[10px] text-sky-700 font-bold">রিসেলার সাপোর্ট চ্যাট</span>
+                          </label>
+                          <input
+                            type="text"
+                            value={branding.resellerWhatsappNumber || ''}
+                            onChange={(e) => setBranding({ ...branding, resellerWhatsappNumber: e.target.value })}
+                            placeholder="যেমন: 01700000000 বা https://wa.me/8801700000000"
+                            className="w-full px-3.5 py-2.5 text-xs bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:border-sky-600 outline-none font-mono text-slate-900 font-bold shadow-2xs"
+                          />
+                          <p className="text-[10.5px] text-slate-500">
+                            রিসেলার প্যানেলে "WhatsApp Support" বাটনে এই নির্দিষ্ট হোয়াটসঅ্যাপ নম্বরটি খুলবে।
+                          </p>
+                        </div>
+
+                        {/* 2. Reseller Contact Number */}
+                        <div className="space-y-1.5">
+                          <label className="text-xs font-black text-slate-800 block flex items-center justify-between">
+                            <span>Contact Number</span>
+                            <span className="text-[10px] text-slate-500">রিসেলার হেল্পডেস্ক</span>
+                          </label>
+                          <input
+                            type="text"
+                            value={branding.resellerContactNumber || ''}
+                            onChange={(e) => setBranding({ ...branding, resellerContactNumber: e.target.value })}
+                            placeholder="যেমন: 01700000000"
+                            className="w-full px-3.5 py-2.5 text-xs bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:border-sky-600 outline-none font-mono text-slate-900 font-bold shadow-2xs"
+                          />
+                          <p className="text-[10.5px] text-slate-500">
+                            রিসেলারদের সাধারণ কন্টাক্ট ও বিকাশ/নগদ পেমেন্ট সহায়তায় দেখাবে।
+                          </p>
+                        </div>
+
+                        {/* 3. Reseller Hotline Number */}
+                        <div className="space-y-1.5">
+                          <label className="text-xs font-black text-slate-800 block flex items-center justify-between">
+                            <span>Hotline Number</span>
+                            <span className="text-[10px] text-sky-700 font-bold">রিসেলার কল সেন্টার</span>
+                          </label>
+                          <input
+                            type="text"
+                            value={branding.resellerHotlinePhone || ''}
+                            onChange={(e) => setBranding({ ...branding, resellerHotlinePhone: e.target.value })}
+                            placeholder="যেমন: 01800000000"
+                            className="w-full px-3.5 py-2.5 text-xs bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:border-sky-600 outline-none font-mono text-slate-900 font-bold shadow-2xs"
+                          />
+                          <p className="text-[10.5px] text-slate-500">
+                            রিসেলার সাপোর্ট ট্যাবের "কল সেন্টার" অপশনে এই নম্বরটি সরাসরি দেখাবে।
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Reseller Action Buttons */}
+                    <div className="p-4 bg-sky-50/60 border-t border-sky-100 flex flex-wrap items-center justify-between gap-2">
+                      {branding.resellerWhatsappNumber ? (
+                        <a
+                          href={
+                            branding.resellerWhatsappNumber.startsWith('http')
+                              ? branding.resellerWhatsappNumber
+                              : `https://wa.me/${branding.resellerWhatsappNumber.replace(/[^0-9]/g, '')}`
+                          }
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-3 py-2 bg-sky-100 hover:bg-sky-200 text-sky-900 text-xs font-extrabold rounded-xl border border-sky-300 transition-all cursor-pointer"
+                        >
+                          🧪 চ্যাট টেস্ট করুন
+                        </a>
+                      ) : <div />}
+
+                      <button
+                        type="button"
+                        onClick={() => handleSaveBranding()}
+                        className="px-4 py-2 bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold rounded-xl shadow-xs transition-all cursor-pointer"
+                      >
+                        💾 রিসেলার কন্টাক্ট সেভ করুন
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <>
+                {/* Single Line Header with Title and Save Button */}
+                <div className="flex items-center justify-between gap-3 bg-white px-5 py-3.5 rounded-2xl border border-slate-200/80 shadow-xs">
+                  <h2 className="text-base sm:text-lg font-black text-slate-900 tracking-tight flex items-center gap-2">
+                    <Settings className="w-5 h-5 text-[#009245]" />
+                    <span>{lang === 'bn' ? 'ব্যানার ও ব্র্যান্ডিং নিয়ন্ত্রণ' : 'Branding & Banner Management'}</span>
+                  </h2>
+
+                  <button
+                    type="button"
+                    onClick={handleSaveBranding}
+                    className="px-4 py-2 bg-[#009245] hover:bg-[#007a38] text-white text-xs font-black rounded-xl shadow-xs transition-all hover:scale-105 flex items-center gap-1.5 cursor-pointer shrink-0"
+                  >
+                    <Check className="w-4 h-4" />
+                    <span>{lang === 'bn' ? '💾 পরিবর্তন সংরক্ষণ করুন' : 'Save Changes'}</span>
+                  </button>
+                </div>
+
+                <form onSubmit={handleSaveBranding} className="space-y-6">
               
               {/* ========================================================================= */}
               {/* SECTOR 1: বেসিক ব্র্যান্ডিং ও পরিচিতি (Basic Branding & Identity) */}
@@ -5710,6 +6104,41 @@ export const AdminPortal: React.FC = () => {
                 </div>
 
                 <div className="p-5 sm:p-6 space-y-4 bg-emerald-50/20">
+                  {/* Public WhatsApp Connection Status Indicator */}
+                  <div className={`p-3.5 rounded-xl border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 ${
+                    branding.whatsappNumber && branding.whatsappNumber.trim() !== ''
+                      ? 'bg-emerald-50 border-emerald-300 text-emerald-900 shadow-2xs'
+                      : 'bg-amber-50 border-amber-300 text-amber-900 shadow-2xs'
+                  }`}>
+                    <div className="flex items-center gap-2.5">
+                      <span className="relative flex h-3 w-3">
+                        {branding.whatsappNumber && branding.whatsappNumber.trim() !== '' ? (
+                          <>
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                            <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+                          </>
+                        ) : (
+                          <span className="relative inline-flex rounded-full h-3 w-3 bg-amber-500"></span>
+                        )}
+                      </span>
+                      <div>
+                        <span className="text-xs font-black block">
+                          {branding.whatsappNumber && branding.whatsappNumber.trim() !== ''
+                            ? '🟢 সংযোগ সক্রিয় (Connected) - পাবলিক ওয়েবসাইট ও অর্ডার কনফার্মেশনে যুক্ত'
+                            : '🔴 বিচ্ছিন্ন (Disconnected) - কোনো হোয়াটসঅ্যাপ সেট করা নেই'}
+                        </span>
+                        <p className="text-[10px] text-slate-600 font-medium">
+                          এডমিন প্যানেল থেকে নম্বর বা লিংক পরিবর্তনের পর নিচে সেভ বাটনে চাপ দিলে সঙ্গে সঙ্গে কাস্টমার অর্ডারে সিঙ্ক হবে।
+                        </p>
+                      </div>
+                    </div>
+                    {branding.whatsappNumber && (
+                      <span className="text-xs font-mono font-black bg-white text-emerald-800 px-3 py-1 rounded-lg border border-emerald-200 shrink-0">
+                        {branding.whatsappNumber}
+                      </span>
+                    )}
+                  </div>
+
                   {/* Public WhatsApp Number */}
                   <div className="space-y-1.5">
                     <label className="text-xs font-black text-slate-800 block flex items-center justify-between">
@@ -5819,15 +6248,29 @@ export const AdminPortal: React.FC = () => {
                     </p>
                   </div>
 
-                  {/* Public Editing System Save Button */}
-                  <div className="pt-3 border-t border-emerald-200/80 flex items-center justify-end gap-2">
+                  {/* Public Editing System Save & Test Buttons */}
+                  <div className="pt-3 border-t border-emerald-200/80 flex flex-wrap items-center justify-end gap-2">
+                    {branding.whatsappNumber && (
+                      <a
+                        href={
+                          branding.whatsappNumber.startsWith('http')
+                            ? branding.whatsappNumber
+                            : `https://wa.me/${branding.whatsappNumber.replace(/[^0-9]/g, '')}`
+                        }
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-4 py-2.5 bg-emerald-100 hover:bg-emerald-200 text-emerald-900 text-xs font-extrabold rounded-xl border border-emerald-300 transition-all flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                      >
+                        <span>🧪 হোয়াটসঅ্যাপ চ্যাট টেস্ট করুন</span>
+                      </a>
+                    )}
                     <button
                       type="button"
                       onClick={() => handleSaveBranding()}
                       className="px-5 py-2.5 bg-[#009245] hover:bg-[#007a38] text-white text-xs font-black rounded-xl shadow-md transition-all hover:scale-105 flex items-center gap-1.5 cursor-pointer"
                     >
                       <Check className="w-4 h-4" />
-                      <span>💾 পাবলিক এডিটিং তথ্য সেভ করুন</span>
+                      <span>💾 পাবলিক হোয়াটসঅ্যাপ ও তথ্য সেভ করুন</span>
                     </button>
                   </div>
                 </div>
@@ -6586,6 +7029,8 @@ export const AdminPortal: React.FC = () => {
               </div>
 
             </form>
+            </>
+          )}
           </div>
         )}
 
@@ -6912,29 +7357,32 @@ export const AdminPortal: React.FC = () => {
         {/* TAB: NOTIFICATION CENTER */}
         {(['notifications', 'notif_public', 'notif_reseller'].includes(activeTab)) && branding && (
           <div className="space-y-6 max-w-4xl">
+            {/* Top Banner */}
             <div className="bg-gradient-to-r from-rose-600 via-pink-600 to-rose-700 text-white p-5 rounded-2xl shadow-md flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
                 <h2 className="text-xl font-black tracking-tight flex items-center gap-2">
-                  <ExternalLink className="w-5 h-5 text-rose-200" />
-                  <span>{lang === 'bn' ? '৬. নোটিফিকেশন সেকশন (পাবলিক ও রিসেলার)' : '6. Notification Center'}</span>
+                  <Bell className="w-5 h-5 text-rose-200 animate-pulse" />
+                  <span>{lang === 'bn' ? '৮. নোটিফিকেশন বার ও রিয়েল-টাইম নোটিফিকেশন সেকশন' : '8. Real-Time Notification Center'}</span>
                 </h2>
                 <p className="text-xs text-rose-100 mt-0.5">
-                  {lang === 'bn' ? 'পাবলিক টপ ব্যানার এবং রিসেলার ড্যাশবোর্ড নোটিফিকেশন এডিট ও লাইভ পাঠান' : 'Push announcements to public website or reseller dashboard'}
+                  {lang === 'bn' ? 'পাবলিক ওয়েবসাইট ও রিসেলার ড্যাশবোর্ডে তাৎক্ষণিক নোটিফিকেশন ও নোটিশ বার লাইভ পাঠান' : 'Push real-time notifications to public website or reseller dashboard'}
                 </p>
               </div>
 
-              <button
-                type="button"
-                onClick={() => handleSaveBranding()}
-                className="px-5 py-2.5 bg-white text-rose-700 hover:bg-rose-50 text-xs font-black rounded-xl shadow-md transition-all cursor-pointer shrink-0"
-              >
-                💾 নোটিফিকেশন সেভ করুন
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleSaveBranding()}
+                  className="px-5 py-2.5 bg-white text-rose-700 hover:bg-rose-50 text-xs font-black rounded-xl shadow-md transition-all cursor-pointer shrink-0"
+                >
+                  💾 সেটিংস সেভ করুন
+                </button>
+              </div>
             </div>
 
-            {/* Public Notification Box */}
+            {/* 1. Public Notification Box */}
             <div className="bg-white rounded-2xl border-2 border-emerald-300 p-5 sm:p-6 space-y-4 shadow-2xs">
-              <div className="flex items-center justify-between border-b border-emerald-100 pb-3">
+              <div className="flex items-center justify-between border-b border-emerald-100 pb-3 flex-wrap gap-2">
                 <div className="flex items-center gap-2">
                   <span className="w-2.5 h-2.5 rounded-full bg-[#009245] animate-ping" />
                   <h3 className="text-sm font-black text-slate-900">
@@ -6942,14 +7390,28 @@ export const AdminPortal: React.FC = () => {
                   </h3>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => setActivePortal('public')}
-                  className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-[#009245] border border-emerald-200 text-xs font-black rounded-xl cursor-pointer flex items-center gap-1"
-                >
-                  <Eye className="w-3.5 h-3.5" />
-                  <span>হোম পেজে ভিউ করুন</span>
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setActivePortal('public')}
+                    className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-[#009245] border border-emerald-200 text-xs font-black rounded-xl cursor-pointer flex items-center gap-1"
+                  >
+                    <Eye className="w-3.5 h-3.5" />
+                    <span>হোম পেজে ভিউ</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isSendingNotif}
+                    onClick={() => {
+                      const msg = branding.promoBannerTextBn || branding.publicNoticeText || 'আমাদের বিশেষ অফার ও আপডেট দেখুন!';
+                      handleSendLiveNotification('PUBLIC', 'পাবলিক ওয়েবসাইট বিশেষ ঘোষণা', msg);
+                    }}
+                    className="px-3 py-1.5 bg-[#009245] hover:bg-[#007a38] text-white text-xs font-black rounded-xl cursor-pointer flex items-center gap-1 shadow-2xs disabled:opacity-50"
+                  >
+                    <Bell className="w-3.5 h-3.5" />
+                    <span>🚀 পাবলিক নোটিফিকেশন হিসেবে লাইভ পাঠান</span>
+                  </button>
+                </div>
               </div>
 
               <div className="space-y-3">
@@ -6977,9 +7439,9 @@ export const AdminPortal: React.FC = () => {
               </div>
             </div>
 
-            {/* Reseller Notification Box */}
+            {/* 2. Reseller Notification Box */}
             <div className="bg-white rounded-2xl border-2 border-cyan-300 p-5 sm:p-6 space-y-4 shadow-2xs">
-              <div className="flex items-center justify-between border-b border-cyan-100 pb-3">
+              <div className="flex items-center justify-between border-b border-cyan-100 pb-3 flex-wrap gap-2">
                 <div className="flex items-center gap-2">
                   <span className="w-2.5 h-2.5 rounded-full bg-cyan-600 animate-ping" />
                   <h3 className="text-sm font-black text-slate-900">
@@ -6987,14 +7449,28 @@ export const AdminPortal: React.FC = () => {
                   </h3>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => setActivePortal('employee')}
-                  className="px-3 py-1.5 bg-cyan-50 hover:bg-cyan-100 text-cyan-800 border border-cyan-200 text-xs font-black rounded-xl cursor-pointer flex items-center gap-1"
-                >
-                  <Eye className="w-3.5 h-3.5" />
-                  <span>রিসেলার পোর্টালে ভিউ করুন</span>
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setActivePortal('employee')}
+                    className="px-3 py-1.5 bg-cyan-50 hover:bg-cyan-100 text-cyan-800 border border-cyan-200 text-xs font-black rounded-xl cursor-pointer flex items-center gap-1"
+                  >
+                    <Eye className="w-3.5 h-3.5" />
+                    <span>রিসেলার পোর্টালে ভিউ</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isSendingNotif}
+                    onClick={() => {
+                      const msg = branding.resellerNotificationNotice || 'সকল রিসেলারদের অবগতির জন্য নতুন আপডেট জানানো হচ্ছে।';
+                      handleSendLiveNotification('EMPLOYEE', 'রিসেলার ড্যাশবোর্ড গুরুত্বপূর্ণ নোটিশ', msg);
+                    }}
+                    className="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-700 text-white text-xs font-black rounded-xl cursor-pointer flex items-center gap-1 shadow-2xs disabled:opacity-50"
+                  >
+                    <Bell className="w-3.5 h-3.5" />
+                    <span>🚀 রিসেলারদের নোটিফিকেশন হিসেবে লাইভ পাঠান</span>
+                  </button>
+                </div>
               </div>
 
               <div className="space-y-3">
@@ -7011,6 +7487,162 @@ export const AdminPortal: React.FC = () => {
               </div>
             </div>
 
+            {/* 3. Instant Live Notification Sender */}
+            <div className="bg-white rounded-2xl border-2 border-indigo-200 p-5 sm:p-6 space-y-4 shadow-2xs">
+              <div className="flex items-center justify-between border-b border-indigo-100 pb-3">
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold">
+                    <Sparkles className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-black text-slate-900">
+                      {lang === 'bn' ? '📢 ৩. ইনস্ট্যান্ট লাইভ নোটিফিকেশন ডিসপ্যাচার (Live Notification Sender)' : '3. Instant Live Notification Sender'}
+                    </h3>
+                    <p className="text-[11px] text-slate-500">
+                      {lang === 'bn' ? 'সরাসরি পাবলিক বা রিসেলারদের স্ক্রিনে রিয়েল-টাইমে ঘণ্টা আইকন ও সাউন্ড সহ নোটিফিকেশন পাঠান' : 'Broadcast instant notifications with bell badge and sound alert'}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-3.5">
+                {/* Target Portal Selector */}
+                <div>
+                  <label className="text-xs font-bold text-slate-700 block mb-1.5">প্রাপক নির্বাচন করুন (Target Audience):</label>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setNotifTarget('PUBLIC')}
+                      className={`px-3 py-2 rounded-xl text-xs font-bold border transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                        notifTarget === 'PUBLIC'
+                          ? 'bg-emerald-50 border-emerald-500 text-[#009245] shadow-xs'
+                          : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                      }`}
+                    >
+                      <span>🌐 পাবলিক ওয়েবসাইট (Public)</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNotifTarget('EMPLOYEE')}
+                      className={`px-3 py-2 rounded-xl text-xs font-bold border transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                        notifTarget === 'EMPLOYEE'
+                          ? 'bg-cyan-50 border-cyan-500 text-cyan-800 shadow-xs'
+                          : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                      }`}
+                    >
+                      <span>💼 রিসেলার প্যানেল (Resellers)</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNotifTarget('ALL')}
+                      className={`px-3 py-2 rounded-xl text-xs font-bold border transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                        notifTarget === 'ALL'
+                          ? 'bg-indigo-50 border-indigo-500 text-indigo-700 shadow-xs'
+                          : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                      }`}
+                    >
+                      <span>👥 উভয় প্ল্যাটফর্ম (All Users)</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Notification Title */}
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-700 block">নোটিফিকেশনের শিরোনাম (Title):</label>
+                  <input
+                    type="text"
+                    value={notifTitle}
+                    onChange={(e) => setNotifTitle(e.target.value)}
+                    placeholder={notifTarget === 'PUBLIC' ? 'যেমন: বিশেষ ফ্ল্যাশ সেল ও ডিসকাউন্ট অফার!' : 'যেমন: নতুন ট্রেনিং মডিউল ও পেমেন্ট আপডেট'}
+                    className="w-full px-4 py-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:border-indigo-500 outline-none font-bold text-slate-900"
+                  />
+                </div>
+
+                {/* Notification Message */}
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-700 block">নোটিফিকেশনের বিস্তারিত বার্তা (Message):</label>
+                  <textarea
+                    rows={2}
+                    value={notifMessage}
+                    onChange={(e) => setNotifMessage(e.target.value)}
+                    placeholder="নোটিফিকেশন মেসেজটি এখানে লিখুন যা ব্যবহারকারী স্ক্রিনে দেখতে পাবেন..."
+                    className="w-full px-4 py-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:border-indigo-500 outline-none text-slate-900 resize-none font-medium leading-relaxed"
+                  />
+                </div>
+
+                {/* Send Button */}
+                <div className="flex justify-end pt-1">
+                  <button
+                    type="button"
+                    disabled={isSendingNotif || !notifMessage.trim()}
+                    onClick={() => handleSendLiveNotification()}
+                    className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black rounded-xl shadow-md transition-all flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                  >
+                    <Bell className="w-4 h-4" />
+                    <span>{isSendingNotif ? 'পাঠানো হচ্ছে...' : '🚀 নোটিফিকেশন লাইভ পাঠান (Send Real-Time Notification)'}</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* 4. Recently Broadcast Notifications List */}
+            {allNotifications.filter(n => n.recipientRole === 'PUBLIC' || n.recipientRole === 'EMPLOYEE').length > 0 && (
+              <div className="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 space-y-3 shadow-xs">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                  <h3 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                    <Clock className="w-4 h-4 text-slate-500" />
+                    <span>সাম্প্রতিক পাঠানো নোটিফিকেশনসমূহ (Recently Sent Notifications)</span>
+                  </h3>
+                  <span className="text-xs text-slate-400 font-bold">
+                    মোট {allNotifications.filter(n => n.recipientRole === 'PUBLIC' || n.recipientRole === 'EMPLOYEE').length} টি
+                  </span>
+                </div>
+
+                <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                  {allNotifications
+                    .filter(n => n.recipientRole === 'PUBLIC' || n.recipientRole === 'EMPLOYEE')
+                    .slice(0, 8)
+                    .map((item) => (
+                      <div
+                        key={item.id}
+                        className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between gap-3 text-xs"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2 mb-0.5">
+                            <span className={`px-2 py-0.5 rounded-md text-[10px] font-black ${
+                              item.recipientRole === 'PUBLIC'
+                                ? 'bg-emerald-100 text-[#009245]'
+                                : 'bg-cyan-100 text-cyan-800'
+                            }`}>
+                              {item.recipientRole === 'PUBLIC' ? '🌐 পাবলিক' : '💼 রিসেলার'}
+                            </span>
+                            <span className="font-bold text-slate-900 truncate">
+                              {item.titleBn || item.titleEn}
+                            </span>
+                            <span className="text-[10px] text-slate-400 shrink-0">
+                              {new Date(item.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                          </div>
+                          <p className="text-slate-600 text-[11px] truncate">
+                            {item.messageBn || item.messageEn}
+                          </p>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteNotification(item.id)}
+                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer shrink-0"
+                          title="মুছে ফেলুন"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                </div>
+              </div>
+            )}
+
+            {/* Bottom Save Button */}
             <div className="pt-2 flex justify-end">
               <button
                 type="button"
@@ -7018,7 +7650,7 @@ export const AdminPortal: React.FC = () => {
                 className="px-6 py-2.5 bg-[#009245] hover:bg-[#007a38] text-white text-xs font-black rounded-xl shadow-md cursor-pointer flex items-center gap-1.5"
               >
                 <Check className="w-4 h-4" />
-                <span>সকল নোটিফিকেশন সেভ করুন</span>
+                <span>সকল নোটিফিকেশন ও সেটিংস সেভ করুন</span>
               </button>
             </div>
           </div>

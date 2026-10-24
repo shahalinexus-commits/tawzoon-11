@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useApp } from '../context/AppContext.js';
 import {
   ShoppingCart,
@@ -28,6 +28,7 @@ import { SearchInputWithImage } from './common/SearchInputWithImage.js';
 import { BkashBalanceButton } from './common/BkashBalanceButton.js';
 import { api } from '../services/api.js';
 import { NotificationItem } from '../types/index.js';
+import { useRealtimeEvents } from '../hooks/useRealtimeEvents.js';
 
 export const Navbar: React.FC = () => {
   const {
@@ -41,6 +42,9 @@ export const Navbar: React.FC = () => {
     publicSearch,
     setPublicSearch,
     setSelectedProduct,
+    selectedPublicSubcategory,
+    setSelectedPublicSubcategory,
+    refreshBootstrap,
     isAdminAuthenticated,
     adminToken,
     isEmployeeAuthenticated,
@@ -75,61 +79,158 @@ export const Navbar: React.FC = () => {
 
   const brandName = brandSettings?.appName || 'TAWZOON NEXUS';
 
-  // Load notifications dynamically
-  useEffect(() => {
-    let isMounted = true;
-    const loadNotifs = async () => {
-      try {
-        if (employeeToken && isEmployeeAuthenticated) {
-          const res = await api.employeeGetNotifications(employeeToken);
-          if (isMounted && Array.isArray(res)) setNotificationsList(res);
-        } else if (adminToken && isAdminAuthenticated) {
-          const res = await api.adminGetNotifications(adminToken);
-          if (isMounted && Array.isArray(res)) setNotificationsList(res);
-        }
-      } catch {
-        // silent fail
+  const getReadPublicIds = (): string[] => {
+    try {
+      const raw = localStorage.getItem('tawzoon_read_public_notifs');
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  };
+
+  const [readPublicIds, setReadPublicIds] = useState<string[]>(getReadPublicIds);
+  const isInitialLoadRef = useRef(true);
+  const knownNotificationIdsRef = useRef<Set<string>>(new Set());
+
+  // Elegant, harmonious dual chime for incoming notifications
+  const playNotificationChime = useCallback(() => {
+    try {
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioContextClass) return;
+      const ctx = new AudioContextClass();
+      if (ctx.state === 'suspended') {
+        ctx.resume().catch(() => {});
       }
-    };
-    loadNotifs();
-    const interval = setInterval(loadNotifs, 15000);
-    return () => {
-      isMounted = false;
-      clearInterval(interval);
-    };
-  }, [employeeToken, adminToken, isEmployeeAuthenticated, isAdminAuthenticated]);
+      const now = ctx.currentTime;
+      const notes = [
+        { freq: 523.25, time: now, duration: 0.18, gainVal: 0.12 },
+        { freq: 783.99, time: now + 0.12, duration: 0.28, gainVal: 0.15 }
+      ];
+      notes.forEach(({ freq, time, duration, gainVal }) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq, time);
+        gain.gain.setValueAtTime(0, time);
+        gain.gain.linearRampToValueAtTime(gainVal, time + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, time + duration);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(time);
+        osc.stop(time + duration);
+      });
+    } catch {
+      // Audio autoplay policy fallback
+    }
+  }, []);
 
-  const unreadCount = notificationsList.length > 0 
-    ? notificationsList.filter(n => !n.isRead).length 
-    : 0;
-
-  const prevUnreadRef = useRef(0);
+  // Unlock audio context on user interaction to handle browser autoplay policies
   useEffect(() => {
-    if (unreadCount > prevUnreadRef.current && prevUnreadRef.current >= 0) {
+    const unlockAudio = () => {
       try {
         const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
         if (AudioContextClass) {
-          const ctx = new AudioContextClass();
-          if (ctx.state === 'suspended') ctx.resume();
-          const now = ctx.currentTime;
-          [587.33, 880].forEach((freq, idx) => {
-            const osc = ctx.createOscillator();
-            const gain = ctx.createGain();
-            osc.type = 'sine';
-            osc.frequency.setValueAtTime(freq, now + idx * 0.12);
-            gain.gain.setValueAtTime(0, now + idx * 0.12);
-            gain.gain.linearRampToValueAtTime(0.15, now + idx * 0.12 + 0.02);
-            gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.12 + 0.35);
-            osc.connect(gain);
-            gain.connect(ctx.destination);
-            osc.start(now + idx * 0.12);
-            osc.stop(now + idx * 0.12 + 0.4);
-          });
+          const dummyCtx = new AudioContextClass();
+          dummyCtx.resume().then(() => {
+            dummyCtx.close().catch(() => {});
+          }).catch(() => {});
         }
       } catch {}
+      window.removeEventListener('click', unlockAudio);
+      window.removeEventListener('touchstart', unlockAudio);
+    };
+    window.addEventListener('click', unlockAudio, { once: true, passive: true });
+    window.addEventListener('touchstart', unlockAudio, { once: true, passive: true });
+    return () => {
+      window.removeEventListener('click', unlockAudio);
+      window.removeEventListener('touchstart', unlockAudio);
+    };
+  }, []);
+
+  // Dynamic notification fetcher supporting Public, Reseller, and Admin
+  const loadNotifs = useCallback(async (isRealtimeEvent = false) => {
+    try {
+      let list: NotificationItem[] = [];
+      if (activePortal === 'employee' && employeeToken && isEmployeeAuthenticated) {
+        const res = await api.employeeGetNotifications(employeeToken);
+        if (Array.isArray(res)) list = res;
+      } else if (activePortal === 'admin' && adminToken && isAdminAuthenticated) {
+        const res = await api.adminGetNotifications(adminToken);
+        if (Array.isArray(res)) list = res;
+      } else {
+        // Public Storefront (visitors and buyers)
+        const res = await api.publicGetNotifications();
+        if (Array.isArray(res)) list = res;
+      }
+
+      setNotificationsList(list);
+
+      // On initial load or page refresh: register existing IDs silently WITHOUT sound
+      if (isInitialLoadRef.current) {
+        list.forEach(item => knownNotificationIdsRef.current.add(item.id));
+        isInitialLoadRef.current = false;
+        return;
+      }
+
+      // On subsequent fetches or real-time events: check for brand-new notification IDs
+      let hasBrandNew = false;
+      for (const item of list) {
+        if (!knownNotificationIdsRef.current.has(item.id)) {
+          knownNotificationIdsRef.current.add(item.id);
+          hasBrandNew = true;
+        }
+      }
+
+      // Play alert chime ONLY when a genuine new notification arrives live
+      if (hasBrandNew && isRealtimeEvent) {
+        playNotificationChime();
+      }
+    } catch {
+      // silent fail
     }
-    prevUnreadRef.current = unreadCount;
-  }, [unreadCount]);
+  }, [activePortal, employeeToken, adminToken, isEmployeeAuthenticated, isAdminAuthenticated, playNotificationChime]);
+
+  // Initial and periodic polling fallback
+  useEffect(() => {
+    loadNotifs(false);
+    const interval = setInterval(() => loadNotifs(false), 12000);
+    return () => clearInterval(interval);
+  }, [loadNotifs]);
+
+  // Listen to Server-Sent Real-time Events for instant notification delivery
+  useRealtimeEvents((event) => {
+    if (
+      event.type === 'NEW_NOTIFICATION' ||
+      event.type === 'NOTIFICATION_ADDED' ||
+      event.type === 'NOTIFICATION_DELETED' ||
+      event.type === 'BRANDING_UPDATED' ||
+      (event.type === 'STATE_UPDATED' && (event.data?.type === 'NOTIFICATION_ADDED' || event.data?.type === 'BRANDING_UPDATED'))
+    ) {
+      loadNotifs(true);
+    }
+  });
+
+  // Listen for local tab / portal read events
+  useEffect(() => {
+    const handleUpdate = () => {
+      setReadPublicIds(getReadPublicIds());
+      loadNotifs(false);
+    };
+    window.addEventListener('tawzoon_notifications_updated', handleUpdate);
+    return () => window.removeEventListener('tawzoon_notifications_updated', handleUpdate);
+  }, [loadNotifs]);
+
+  // Compute accurate unread count per active portal (NO fake numbers, NO fake 99+)
+  const unreadCount = useMemo(() => {
+    if (activePortal === 'employee') {
+      return notificationsList.filter(n => !n.isRead).length;
+    }
+    if (activePortal === 'admin') {
+      return notificationsList.filter(n => !n.isRead).length;
+    }
+    // Public portal
+    return notificationsList.filter(n => !n.isRead && !readPublicIds.includes(n.id)).length;
+  }, [notificationsList, activePortal, readPublicIds]);
 
   // Close dropdowns on outside click
   useEffect(() => {
@@ -162,14 +263,23 @@ export const Navbar: React.FC = () => {
     if (setSelectedProduct) setSelectedProduct(null);
 
     if (type === 'home') {
+      if (setSelectedProduct) setSelectedProduct(null);
+      if (setPublicSearch) setPublicSearch('');
+      if (setSelectedPublicSubcategory) setSelectedPublicSubcategory(null);
+      if (setIsPublicCartOpen) setIsPublicCartOpen(false);
+      if (refreshBootstrap) {
+        refreshBootstrap().catch(() => {});
+      }
+
       if (isEmployeeAuthenticated) {
         setActivePortal('employee');
-        setResellerTab('catalog');
+        if (setResellerTab) setResellerTab('catalog');
         window.dispatchEvent(new CustomEvent('tawzoon_nav_home'));
         window.scrollTo({ top: 0, behavior: 'smooth' });
       } else {
         setActivePortal('public');
         if (setPublicCategory) setPublicCategory('all');
+        window.dispatchEvent(new CustomEvent('tawzoon_nav_home'));
         window.scrollTo({ top: 0, behavior: 'smooth' });
       }
     } else if (type === 'dashboard') {
@@ -207,16 +317,16 @@ export const Navbar: React.FC = () => {
     }
   };
 
-  const isHomeActive = isReseller
-    ? resellerTab === 'catalog'
-    : activePortal === 'public' && publicCategory !== 'wishlist' && publicCategory !== 'shop_tab';
-  const isDashboardActive = isReseller
-    ? resellerTab === 'dashboard'
-    : activePortal === 'public' && publicCategory === 'shop_tab';
-  const isCartActive = isReseller ? resellerTab === 'cart' : isPublicCartOpen;
-  const isOrdersActive = isReseller
+  const isCartActive = isReseller ? resellerTab === 'cart' : Boolean(isPublicCartOpen);
+  const isOrdersActive = !isCartActive && (isReseller
     ? resellerTab === 'orders'
-    : activePortal === 'public' && publicCategory === 'wishlist';
+    : activePortal === 'public' && publicCategory === 'wishlist');
+  const isDashboardActive = !isCartActive && !isOrdersActive && (isReseller
+    ? resellerTab === 'dashboard'
+    : activePortal === 'public' && publicCategory === 'shop_tab');
+  const isHomeActive = !isCartActive && !isOrdersActive && !isDashboardActive && (isReseller
+    ? resellerTab === 'catalog'
+    : activePortal === 'public' && publicCategory !== 'wishlist' && publicCategory !== 'shop_tab');
 
   const handleProfileClick = () => {
     setProfileMenuOpen(false);
@@ -350,21 +460,10 @@ export const Navbar: React.FC = () => {
                 </button>
               )}
               <button
-                onClick={() => {
-                  if (setSelectedProduct) setSelectedProduct(null);
-                  if (setPublicSearch) setPublicSearch('');
-                  if (activePortal === 'employee' || isEmployeeAuthenticated) {
-                    setActivePortal('employee');
-                    if (setResellerTab) setResellerTab('catalog');
-                  } else if (activePortal === 'admin') {
-                    setActivePortal('admin');
-                  } else {
-                    setActivePortal('public');
-                    if (setPublicCategory) setPublicCategory('all');
-                  }
-                  window.scrollTo({ top: 0, behavior: 'smooth' });
-                }}
+                type="button"
+                onClick={() => handleNavClick('home')}
                 className="flex items-center gap-2 text-left group focus:outline-none cursor-pointer shrink-0"
+                title={lang === 'bn' ? 'হোম পেজ' : 'Home'}
               >
                 {/* Brand Logo - Subtle Rounded Squircle (হালকা রাউন্ড শেপ, হালকা বড়) */}
                 <img
@@ -437,14 +536,14 @@ export const Navbar: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => handleNavClick('home')}
-                  className={`flex items-center gap-1.5 px-2.5 lg:px-3.5 py-1.5 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer ${
+                  className={`flex items-center gap-1.5 px-2.5 lg:px-3.5 py-1.5 rounded-xl text-xs sm:text-sm font-bold transition-all duration-300 ease-in-out cursor-pointer ${
                     isHomeActive
-                      ? 'bg-emerald-50 text-[#009245] dark:bg-emerald-950/60 dark:text-emerald-400 shadow-3xs'
-                      : 'text-slate-700 hover:text-slate-900 hover:bg-slate-100 dark:text-slate-300 dark:hover:text-white dark:hover:bg-slate-800'
+                      ? 'bg-emerald-50 text-[#009245] dark:bg-emerald-950/60 dark:text-emerald-400 shadow-2xs ring-1 ring-[#009245]/20 scale-[1.02]'
+                      : 'text-slate-700 hover:text-[#009245] hover:bg-emerald-50/50 dark:text-slate-300 dark:hover:text-white dark:hover:bg-slate-800 active:scale-95'
                   }`}
                   title={lang === 'bn' ? 'হোম পেজ' : 'Home'}
                 >
-                  <Home className="w-4 h-4 sm:w-4.5 sm:h-4.5" />
+                  <Home className={`w-4 h-4 sm:w-4.5 sm:h-4.5 transition-transform duration-300 ${isHomeActive ? 'scale-105' : ''}`} />
                   <span>{lang === 'bn' ? 'হোম' : 'Home'}</span>
                 </button>
 
@@ -452,21 +551,21 @@ export const Navbar: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => handleNavClick('dashboard')}
-                  className={`flex items-center gap-1.5 px-2.5 lg:px-3.5 py-1.5 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer ${
+                  className={`flex items-center gap-1.5 px-2.5 lg:px-3.5 py-1.5 rounded-xl text-xs sm:text-sm font-bold transition-all duration-300 ease-in-out cursor-pointer ${
                     isDashboardActive
-                      ? 'bg-emerald-50 text-[#009245] dark:bg-emerald-950/60 dark:text-emerald-400 shadow-3xs'
-                      : 'text-slate-700 hover:text-slate-900 hover:bg-slate-100 dark:text-slate-300 dark:hover:text-white dark:hover:bg-slate-800'
+                      ? 'bg-emerald-50 text-[#009245] dark:bg-emerald-950/60 dark:text-emerald-400 shadow-2xs ring-1 ring-[#009245]/20 scale-[1.02]'
+                      : 'text-slate-700 hover:text-[#009245] hover:bg-emerald-50/50 dark:text-slate-300 dark:hover:text-white dark:hover:bg-slate-800 active:scale-95'
                   }`}
                   title={isReseller ? (lang === 'bn' ? 'ড্যাশবোর্ড' : 'Dashboard') : (lang === 'bn' ? 'সকল পণ্য' : 'All Products')}
                 >
                   {isReseller ? (
                     <>
-                      <LayoutDashboard className="w-4 h-4 sm:w-4.5 sm:h-4.5" />
+                      <LayoutDashboard className={`w-4 h-4 sm:w-4.5 sm:h-4.5 transition-transform duration-300 ${isDashboardActive ? 'scale-105' : ''}`} />
                       <span>{lang === 'bn' ? 'ড্যাশবোর্ড' : 'Dashboard'}</span>
                     </>
                   ) : (
                     <>
-                      <ShoppingBag className="w-4 h-4 sm:w-4.5 sm:h-4.5" />
+                      <ShoppingBag className={`w-4 h-4 sm:w-4.5 sm:h-4.5 transition-transform duration-300 ${isDashboardActive ? 'scale-105' : ''}`} />
                       <span>{lang === 'bn' ? 'সকল পণ্য' : 'All Products'}</span>
                     </>
                   )}
@@ -476,21 +575,21 @@ export const Navbar: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => handleNavClick('orders')}
-                  className={`relative flex items-center gap-1.5 px-2.5 lg:px-3.5 py-1.5 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer ${
+                  className={`relative flex items-center gap-1.5 px-2.5 lg:px-3.5 py-1.5 rounded-xl text-xs sm:text-sm font-bold transition-all duration-300 ease-in-out cursor-pointer ${
                     isOrdersActive
-                      ? 'bg-emerald-50 text-[#009245] dark:bg-emerald-950/60 dark:text-emerald-400 shadow-3xs'
-                      : 'text-slate-700 hover:text-slate-900 hover:bg-slate-100 dark:text-slate-300 dark:hover:text-white dark:hover:bg-slate-800'
+                      ? 'bg-emerald-50 text-[#009245] dark:bg-emerald-950/60 dark:text-emerald-400 shadow-2xs ring-1 ring-[#009245]/20 scale-[1.02]'
+                      : 'text-slate-700 hover:text-[#009245] hover:bg-emerald-50/50 dark:text-slate-300 dark:hover:text-white dark:hover:bg-slate-800 active:scale-95'
                   }`}
                   title={isReseller ? (lang === 'bn' ? 'অর্ডারসমূহ' : 'Orders') : (lang === 'bn' ? 'পছন্দের তালিকা' : 'Favorites')}
                 >
                   {isReseller ? (
                     <>
-                      <Package className="w-4 h-4 sm:w-4.5 sm:h-4.5" />
+                      <Package className={`w-4 h-4 sm:w-4.5 sm:h-4.5 transition-transform duration-300 ${isOrdersActive ? 'scale-105' : ''}`} />
                       <span>{lang === 'bn' ? 'অর্ডার' : 'Orders'}</span>
                     </>
                   ) : (
                     <>
-                      <Heart className={`w-4 h-4 sm:w-4.5 sm:h-4.5 ${isOrdersActive ? 'fill-[#009245]' : ''}`} />
+                      <Heart className={`w-4 h-4 sm:w-4.5 sm:h-4.5 transition-all duration-300 ${isOrdersActive ? 'fill-[#009245] scale-105' : ''}`} />
                       <span>{lang === 'bn' ? 'পছন্দ' : 'Favorites'}</span>
                       {wishlistItems && wishlistItems.length > 0 && (
                         <span className="min-w-4 h-4 px-1 rounded-full bg-rose-500 text-white text-[9px] font-black flex items-center justify-center leading-none animate-badge-pulse">
@@ -505,17 +604,17 @@ export const Navbar: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => handleNavClick('cart')}
-                  className={`relative flex items-center gap-1.5 px-2.5 lg:px-3.5 py-1.5 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer ${
+                  className={`relative flex items-center gap-1.5 px-2.5 lg:px-3.5 py-1.5 rounded-xl text-xs sm:text-sm font-bold transition-all duration-300 ease-in-out cursor-pointer ${
                     isCartActive
-                      ? 'bg-[#009245] text-white shadow-xs'
-                      : 'bg-emerald-50 text-[#009245] hover:bg-emerald-100 dark:bg-emerald-950/60 dark:text-emerald-400 dark:hover:bg-emerald-900/60'
+                      ? 'bg-emerald-50 text-[#009245] dark:bg-emerald-950/60 dark:text-emerald-400 shadow-2xs ring-1 ring-[#009245]/20 scale-[1.02]'
+                      : 'text-slate-700 hover:text-[#009245] hover:bg-emerald-50/50 dark:text-slate-300 dark:hover:text-white dark:hover:bg-slate-800 active:scale-95'
                   }`}
                   title={lang === 'bn' ? 'শপিং কার্ট' : 'Shopping Cart'}
                 >
-                  <ShoppingCart className="w-4 h-4 sm:w-4.5 sm:h-4.5" />
+                  <ShoppingCart className={`w-4 h-4 sm:w-4.5 sm:h-4.5 transition-transform duration-300 ${isCartActive ? 'scale-105' : ''}`} />
                   <span>{lang === 'bn' ? 'কার্ট' : 'Cart'}</span>
-                  <span className={`min-w-4 h-4 px-1 rounded-full text-[10px] font-black flex items-center justify-center leading-none animate-badge-pulse ${
-                    isCartActive ? 'bg-amber-400 text-slate-900' : 'bg-[#009245] text-white'
+                  <span className={`min-w-4 h-4 px-1 rounded-full text-[10px] font-black flex items-center justify-center leading-none transition-all duration-300 ${
+                    isCartActive ? 'bg-[#009245] text-white shadow-2xs scale-105' : 'bg-[#009245] text-white'
                   }`}>
                     {cartItems.length}
                   </span>
@@ -553,10 +652,10 @@ export const Navbar: React.FC = () => {
                 >
                   <Bell className="w-5 h-5 sm:w-5.5 sm:h-5.5" />
                   
-                  {/* Dynamic Unread Notification Badge with Professional Scale & Multi-digit support */}
+                  {/* Dynamic Unread Notification Badge with Real Count (Never Fake 99+) */}
                   {unreadCount > 0 && (
-                    <span className="absolute -top-0.5 -right-0.5 min-w-[15px] h-[15px] px-1 rounded-full bg-[#e31b23] text-white text-[9px] font-bold flex items-center justify-center shadow-xs border-[1.5px] border-white dark:border-slate-900 leading-none animate-badge-pulse">
-                      {unreadCount > 99 ? '99+' : unreadCount}
+                    <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-[16px] px-1 rounded-full bg-[#e31b23] text-white text-[9.5px] font-black flex items-center justify-center shadow-xs border-[1.5px] border-white dark:border-slate-900 leading-none animate-badge-pulse">
+                      {unreadCount}
                     </span>
                   )}
                 </button>
@@ -745,7 +844,7 @@ export const Navbar: React.FC = () => {
                        <Download className="w-4 h-4 text-[#009245] group-hover:scale-110 transition-transform" />
                        <span className="font-semibold tracking-tight">{typeof window !== 'undefined' && window.innerWidth < 768 ? 'APK Download' : 'PC App Download'}</span>
                      </span>
-                     <span className="text-[9px] font-bold uppercase tracking-wider bg-blue-600 hover:bg-blue-700 px-2 py-0.5 rounded-md text-white shadow-3xs transition-colors">
+                     <span className="text-[9px] font-bold uppercase tracking-wider bg-[#009245] hover:bg-[#007a3a] px-2 py-0.5 rounded-md text-white shadow-3xs transition-colors">
                        Install
                      </span>
                    </button>

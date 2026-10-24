@@ -210,7 +210,7 @@ export const ResellerStorefrontView: React.FC<ResellerStorefrontViewProps> = ({ 
   }
 
   return (
-    <div className="min-h-screen bg-[#fafaf9] font-sans text-slate-900 selection:bg-slate-900 selection:text-white flex flex-col justify-between">
+    <div className="min-h-screen bg-[#fafaf9] font-sans text-slate-900 selection:bg-emerald-200 selection:text-emerald-950 flex flex-col justify-between">
       
       {/* 1. TOP ANNOUNCEMENT PROMO BAR */}
       <div

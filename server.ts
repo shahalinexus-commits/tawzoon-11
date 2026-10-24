@@ -931,6 +931,7 @@ async function sendTelegramOrderNotification(orderData: {
   saleStatus?: string;
   deliveryStatus?: string;
   trackingCode?: string;
+  createdAt?: string | Date;
 }, brandSettings: any) {
   try {
     const token = brandSettings?.telegramBotToken;
@@ -956,140 +957,295 @@ async function sendTelegramOrderNotification(orderData: {
 
     if (!chatId) return;
 
-    const itemsText = orderData.items.map((it: any, i: number) => 
-      `${i + 1}. *${it.productName || 'পণ্য'}*\n   • কোড: #${it.productCode || 'N/A'}\n   • সাইজ: ${it.size || 'N/A'}\n   • পরিমাণ: ${it.quantity || 1}টি x ৳${(it.unitPrice || 0).toLocaleString()} = ৳${((it.unitPrice || 0) * (it.quantity || 1)).toLocaleString()}`
-    ).join('\n\n');
+    const resolvedBaseUrl = (process.env.APP_URL || 'https://ais-dev-joh5npiijvb3nx2bvod7vs-697439367961.asia-southeast1.run.app').replace(/\/$/, '');
 
-    const resellerDisplay = orderData.employeeName && orderData.employeeName !== 'OFFICIAL' && orderData.employeeName !== 'অফিসিয়াল ওয়েবসাইট'
-      ? orderData.employeeName
-      : 'অফিসিয়াল ওয়েবসাইট (Official)';
+    const isPublic = !orderData.employeeName || orderData.employeeName === 'পাবলিক ওয়েবসাইট' || orderData.employeeName === 'অফিসিয়াল ওয়েবসাইট' || orderData.employeeName === 'OFFICIAL';
 
-    const isPublic = orderData.employeeName === 'পাবলিক ওয়েবসাইট';
-    const sourceLabel = isPublic ? '📢 পাবলিক ওয়েবসাইট' : `🔥 রিসেলার: ${orderData.employeeName}`;
-    
-    // Parse address
+    // Parse address parts
     let addressParts = { district: '', thana: '', address: '' };
-    const addrMatch = orderData.customerAddress.match(/জেলা: (.*), থানা: (.*), ঠিকানা: (.*)/);
+    const addrMatch = (orderData.customerAddress || '').match(/জেলা: (.*?), থানা: (.*?), ঠিকানা: (.*)/);
     if (addrMatch) {
-      addressParts = { district: addrMatch[1], thana: addrMatch[2], address: addrMatch[3] };
+      addressParts = { district: addrMatch[1].trim(), thana: addrMatch[2].trim(), address: addrMatch[3].trim() };
     } else {
-      addressParts.address = orderData.customerAddress;
+      addressParts.address = (orderData.customerAddress || '').trim();
     }
 
-    const message = `${isPublic ? '📢' : '🔥'} *নতুন অর্ডার নোটিফিকেশন* ${isPublic ? '📢' : '🔥'}
+    // ========================================================
+    // TELEGRAM ORDER NOTIFICATION (Photos First, then Detailed Order Text Message)
+    // ========================================================
+    // Helper function to sanitize text for Telegram Markdown
+    function sanitizeMd(val: any): string {
+      if (val === null || val === undefined) return '';
+      return String(val).replace(/([*_`\[\]])/g, '');
+    }
+
+    // Format date in Bangladesh time: e.g. 24 Oct 2026, 3:41 PM
+    const orderDateObj = orderData.createdAt ? new Date(orderData.createdAt) : new Date();
+    const formattedDate = new Intl.DateTimeFormat('en-GB', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+      timeZone: 'Asia/Dhaka'
+    }).format(orderDateObj).replace(/(am|pm)/i, (m) => m.toUpperCase());
+
+    // Fetch actual product photos and prepare item details
+    const preparedItems = await Promise.all(
+      (orderData.items || []).map(async (it: any) => {
+        let imageBuffer: Buffer | null = null;
+        const rawUrl = it.imageUrl || it.originalProduct?.imageUrl;
+        if (rawUrl) {
+          try {
+            let buffer: Buffer | null = null;
+            if (rawUrl.startsWith('data:')) {
+              const match = rawUrl.match(/^data:[^;]+;base64,(.+)$/);
+              if (match && match[1]) {
+                buffer = Buffer.from(match[1], 'base64');
+              }
+            } else if (rawUrl.startsWith('http://') || rawUrl.startsWith('https://')) {
+              const res = await fetch(rawUrl, { signal: AbortSignal.timeout(4000) });
+              if (res.ok) {
+                const arr = await res.arrayBuffer();
+                buffer = Buffer.from(arr);
+              }
+            } else {
+              const cleanPath = rawUrl.replace(/^\/+/, '');
+              const localPaths = [
+                path.join(process.cwd(), 'public', cleanPath),
+                path.join(process.cwd(), cleanPath),
+                path.join(process.cwd(), 'uploads', cleanPath.replace(/^uploads\//, ''))
+              ];
+              for (const lp of localPaths) {
+                if (fs.existsSync(lp)) {
+                  buffer = await fs.promises.readFile(lp);
+                  break;
+                }
+              }
+            }
+
+            if (buffer && buffer.length > 0) {
+              try {
+                imageBuffer = await sharp(buffer)
+                  .resize(1200, 1200, { fit: 'inside', withoutEnlargement: true })
+                  .jpeg({ quality: 85 })
+                  .toBuffer();
+              } catch {
+                imageBuffer = buffer;
+              }
+            }
+          } catch (e) {
+            console.warn('[Telegram Product Photo Fetch Warning]:', e);
+          }
+        }
+
+        const rawCode = (it.productCode || it.code || 'TNX').replace(/^#/, '');
+        const cleanCode = rawCode.startsWith('SKU-') ? rawCode : (rawCode === 'TNX' ? 'TNX' : `SKU-${rawCode}`);
+        const pSize = it.size || 'N/A';
+        const qty = it.quantity || 1;
+        const unitPrice = it.unitPrice || it.sellingPrice || 0;
+        const lineTotal = unitPrice * qty;
+        const prodId = it.productId || it.id || '';
+        const productLink = prodId ? `${resolvedBaseUrl}/products/${prodId}` : resolvedBaseUrl;
+
+        return {
+          name: it.productName || 'পণ্য',
+          code: cleanCode,
+          size: pSize,
+          quantity: qty,
+          unitPrice,
+          lineTotal,
+          productLink,
+          imageBuffer,
+          rawUrl
+        };
+      })
+    );
+
+    // Helpers to send photo and text message with copy_text button fallback
+    async function sendPhotoBuffer(
+      buffer: Buffer,
+      caption?: string,
+      markup?: any,
+      fallbackMarkup?: any
+    ): Promise<boolean> {
+      try {
+        const formData = new FormData();
+        formData.append('chat_id', chatId);
+        const blob = new Blob([new Uint8Array(buffer)], { type: 'image/jpeg' });
+        formData.append('photo', blob, 'product.jpg');
+        if (caption) {
+          formData.append('caption', caption);
+          formData.append('parse_mode', 'Markdown');
+        }
+        if (markup) {
+          formData.append('reply_markup', JSON.stringify(markup));
+        }
+
+        const res = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
+          method: 'POST',
+          body: formData
+        });
+        const data = await res.json().catch(() => null);
+        if (data && data.ok) return true;
+
+        if (fallbackMarkup && data && data.description && data.description.includes('BUTTON_TYPE_INVALID')) {
+          const retryFormData = new FormData();
+          retryFormData.append('chat_id', chatId);
+          retryFormData.append('photo', blob, 'product.jpg');
+          if (caption) {
+            retryFormData.append('caption', caption);
+            retryFormData.append('parse_mode', 'Markdown');
+          }
+          retryFormData.append('reply_markup', JSON.stringify(fallbackMarkup));
+          const retryRes = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
+            method: 'POST',
+            body: retryFormData
+          });
+          const retryData = await retryRes.json().catch(() => null);
+          return Boolean(retryData && retryData.ok);
+        }
+        console.warn('[Telegram sendPhoto Warning]:', data);
+        return false;
+      } catch (err) {
+        console.warn('[Telegram sendPhoto Error]:', err);
+        return false;
+      }
+    }
+
+    async function sendTextMessage(
+      text: string,
+      markup?: any,
+      fallbackMarkup?: any
+    ): Promise<boolean> {
+      try {
+        const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text,
+            parse_mode: 'Markdown',
+            ...(markup ? { reply_markup: markup } : {})
+          })
+        });
+        const data = await res.json().catch(() => null);
+        if (data && data.ok) return true;
+
+        if (fallbackMarkup && data && data.description && data.description.includes('BUTTON_TYPE_INVALID')) {
+          const retryRes = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: chatId,
+              text,
+              parse_mode: 'Markdown',
+              reply_markup: fallbackMarkup
+            })
+          });
+          const retryData = await retryRes.json().catch(() => null);
+          return Boolean(retryData && retryData.ok);
+        }
+        console.warn('[Telegram sendMessage Warning]:', data);
+        return false;
+      } catch (err) {
+        console.warn('[Telegram sendMessage Error]:', err);
+        return false;
+      }
+    }
+
+    // ========================================================
+    // STEP 1: Send real product photos FIRST (one message per product)
+    // Each photo has caption + exactly 2 side-by-side buttons: [ 📋 কোড কপি ]  [ 🔗 লিংক কপি ]
+    // ========================================================
+    for (let idx = 0; idx < preparedItems.length; idx++) {
+      const it = preparedItems[idx];
+      const prodPrefix = preparedItems.length > 1 ? `📦 *পণ্য ${idx + 1}:*` : `📦 *পণ্য:*`;
+      const photoCaption = `${prodPrefix} *${sanitizeMd(it.name)}*\n🏷️ SKU: \`#${it.code}\` | সাইজ: ${sanitizeMd(it.size)} | পরিমাণ: ${it.quantity} টি | মূল্য: ৳${it.lineTotal.toLocaleString()}`;
+
+      const productMarkup = {
+        inline_keyboard: [
+          [
+            { text: '📋 কোড কপি', copy_text: { text: it.code } },
+            { text: '🔗 লিংক কপি', copy_text: { text: it.productLink } }
+          ]
+        ]
+      };
+
+      const productFallbackMarkup = {
+        inline_keyboard: [
+          [
+            { text: '📋 কোড কপি', url: `${resolvedBaseUrl}/?search=${encodeURIComponent(it.code)}` },
+            { text: '🔗 লিংক কপি', url: it.productLink }
+          ]
+        ]
+      };
+
+      if (it.imageBuffer) {
+        await sendPhotoBuffer(it.imageBuffer, photoCaption, productMarkup, productFallbackMarkup);
+      } else {
+        await sendTextMessage(photoCaption, productMarkup, productFallbackMarkup);
+      }
+
+      await new Promise((r) => setTimeout(r, 250));
+    }
+
+    // ========================================================
+    // STEP 2: Send comprehensive Order Details Text Message AFTER photos
+    // Formatted strictly according to the reference image layout
+    // ========================================================
+    const sourceBadge = isPublic
+      ? '🌐 [ PUBLIC WEBSITE ]'
+      : `🔥 [ RESELLER PANEL: ${sanitizeMd(orderData.employeeName || 'Reseller')} ]`;
+
+    const itemsBlock = preparedItems.map((it, idx) => {
+      const pLabel = preparedItems.length > 1 ? `*পণ্য ${idx + 1}:*` : `*পণ্য:*`;
+      return `${pLabel}
+*${sanitizeMd(it.name)}*
+🏷️ SKU: \`#${it.code}\`
+🥋 সাইজ: ${sanitizeMd(it.size)}
+📦 পরিমাণ: ${it.quantity} টি
+💰 মূল্য: ৳${it.lineTotal.toLocaleString()}`;
+    }).join('\n\n');
+
+    const advanceInfo = orderData.isAdvancePaid
+      ? ` (${orderData.paymentMethod || 'bKash'} অগ্রিম পেইড${orderData.transactionId ? ` TrxID: ${orderData.transactionId}` : ''})`
+      : '';
+    const dueInfo = (!isPublic && orderData.dueAmount !== undefined)
+      ? `\n💳 *বাকি (COD):* ৳${Number(orderData.dueAmount || 0).toLocaleString()}`
+      : '';
+
+    const orderDetailsMessage = `🌐 *নতুন অর্ডার নোটিফিকেশন*
+🏷️ ${sourceBadge}
+
+🆔 *অর্ডার কোড:* \`${sanitizeMd(orderData.orderCode)}\`
+📅 *অর্ডারের তারিখ:* ${formattedDate}
 ━━━━━━━━━━━━━━━━━━━━
-📌 *সোর্স:* ${sourceLabel}
-🆔 *অর্ডার কোড:* \`${orderData.orderCode}\`
-
-👤 *গ্রাহক তথ্য (কপি করতে ট্যাপ করুন):*
-• নাম: \`${orderData.customerName}\`
-• মোবাইল: \`${orderData.customerPhone}\`
-• জেলা: \`${addressParts.district}\`
-• থানা: \`${addressParts.thana}\`
-• ঠিকানা: \`${addressParts.address}\`
-
+👤 *গ্রাহকের তথ্য:*
+👤 নাম: \`${sanitizeMd(orderData.customerName || 'N/A')}\`
+📞 মোবাইল: \`${sanitizeMd(orderData.customerPhone || 'N/A')}\`
+📍 জেলা: \`${sanitizeMd(addressParts.district || 'ঢাকা')}\`
+🏢 থানা: \`${sanitizeMd(addressParts.thana || 'সদর')}\`
+🏠 ঠিকানা: \`${sanitizeMd(addressParts.address || 'N/A')}\`
+━━━━━━━━━━━━━━━━━━━━
 📦 *অর্ডারকৃত পণ্যসমূহ:*
-${itemsText}
+
+${itemsBlock}
 
 ━━━━━━━━━━━━━━━━━━━━
-💵 *পণ্যের মূল্য মোট:* ৳${orderData.productsTotal.toLocaleString()}
-🚚 *ডেলিভারি চার্জ:* ৳${orderData.deliveryCharge} (${orderData.isAdvancePaid ? `অগ্রিম পেইড [${orderData.paymentMethod} TrxID: ${orderData.transactionId || 'N/A'}]` : 'ক্যাশ অন ডেলিভারি'})
-💰 *সর্বমোট বিল:* ৳${orderData.grandTotal.toLocaleString()}
-💳 *বাকি (COD):* ৳${orderData.dueAmount.toLocaleString()}
-📊 *স্ট্যাটাস:* ${orderData.saleStatus || 'Pending Verification'}`;
+🛒 *পণ্যের মোট মূল্য:* ৳${Number(orderData.productsTotal || 0).toLocaleString()}
+🚚 *ডেলিভারি চার্জ:* ৳${Number(orderData.deliveryCharge || 0).toLocaleString()}${advanceInfo}
+🧮 *সর্বমোট বিল:* ৳${Number(orderData.grandTotal || 0).toLocaleString()}${dueInfo}`;
 
-    const adminUrl = process.env.APP_URL || 'https://ais-dev-h7i2pkla2v2sc5me2lmcrw-940774871860.asia-east1.run.app';
-    const replyMarkup = {
-      inline_keyboard: isPublic ? [
-        [
-          { text: '✅ এপ্রুভ (Confirm)', callback_data: `confirm_${orderData.saleId || orderData.orderCode}` },
-          { text: '❌ রিজেক্ট (Reject)', callback_data: `cancel_${orderData.saleId || orderData.orderCode}` }
-        ],
-        [
-          { text: '🌐 অ্যাডমিন প্যানেলে প্রবেশ করুন', url: adminUrl }
-        ]
-      ] : [
-        [
-          { text: '🌐 অ্যাডমিন প্যানেলে প্রবেশ করুন', url: adminUrl }
-        ]
+    const adminKeyboard = {
+      inline_keyboard: [
+        [{ text: '⚙️ অ্যাডমিন প্যানেলে প্রবেশ করুন ↗', url: resolvedBaseUrl }]
       ]
     };
 
-    // 1. Send each ordered product image individually as a photo to ensure reliable delivery
-    const imagesToSend: string[] = [];
-    if (orderData.items && Array.isArray(orderData.items)) {
-      for (const item of orderData.items) {
-        const imgUrl = item.imageUrl || item.originalProduct?.imageUrl;
-        if (imgUrl && typeof imgUrl === 'string' && !imagesToSend.includes(imgUrl)) {
-          imagesToSend.push(imgUrl);
-        }
-      }
-    }
-
-    if (imagesToSend.length > 0) {
-      try {
-        const resolvedBaseUrl = process.env.APP_URL || 'https://ais-dev-mrusyenjorkxq5mhm5imzd-697439367961.asia-southeast1.run.app';
-        
-        for (let i = 0; i < imagesToSend.length; i++) {
-          let imageUrl = imagesToSend[i];
-          if (imageUrl.startsWith('/')) {
-            imageUrl = `${resolvedBaseUrl}${imageUrl}`;
-          } else if (!imageUrl.startsWith('http') && !imageUrl.startsWith('data:')) {
-            imageUrl = `${resolvedBaseUrl}/${imageUrl}`;
-          }
-
-          if (imageUrl.startsWith('data:')) {
-            const matches = imageUrl.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
-            if (matches && matches.length === 3) {
-              const mimeType = matches[1];
-              const base64Data = matches[2];
-              const buffer = Buffer.from(base64Data, 'base64');
-              const ext = mimeType.split('/')[1] || 'jpg';
-
-              const formData = new FormData();
-              formData.append('chat_id', chatId);
-              formData.append('caption', i === 0 ? `🖼️ *অর্ডারকৃত পণ্যের ছবিসমূহ* (\`${orderData.orderCode}\`)` : `🖼️ *পণ্য #${i + 1} ছবি*`);
-              formData.append('parse_mode', 'Markdown');
-
-              const blob = new Blob([buffer], { type: mimeType });
-              formData.append('photo', blob, `product_${i + 1}.${ext}`);
-
-              await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
-                method: 'POST',
-                body: formData
-              });
-            }
-          } else {
-            await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                chat_id: chatId,
-                photo: imageUrl,
-                caption: i === 0 ? `🖼️ *অর্ডারকৃত পণ্যের ছবিসমূহ* (\`${orderData.orderCode}\`)` : `🖼️ *পণ্য #${i + 1} ছবি*`,
-                parse_mode: 'Markdown'
-              })
-            });
-          }
-          // Small pause to prevent rate limiting
-          await new Promise(r => setTimeout(r, 350));
-        }
-      } catch (e) {
-        console.warn('Telegram individual photo send error:', e);
-      }
-    }
-
-    // 2. Send the professional colored order details message with inline reply markup
-    await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text: message,
-        parse_mode: 'Markdown',
-        reply_markup: replyMarkup
-      })
-    });
+    // Send the detailed text message with the Admin Panel button at the end
+    await sendTextMessage(orderDetailsMessage, adminKeyboard);
   } catch (err) {
     console.warn('Failed to send Telegram notification:', err);
   }
@@ -2252,6 +2408,22 @@ app.get('/api/employee/notifications', verifyEmployee, (req: Request, res: Respo
   }
 
   res.json(notifs.slice(0, 30));
+});
+
+app.patch('/api/employee/notifications/mark-all-read', verifyEmployee, (req: Request, res: Response) => {
+  const emp = (req as any).employee;
+  const state = db.getState();
+  let updated = false;
+  for (const n of state.notifications || []) {
+    if (n.recipientRole === 'EMPLOYEE' && (!n.employeeId || n.employeeId === emp.id)) {
+      if (!n.isRead) {
+        n.isRead = true;
+        updated = true;
+      }
+    }
+  }
+  if (updated) db.save();
+  res.json({ success: true });
 });
 
 app.patch('/api/employee/notifications/:id/read', verifyEmployee, (req: Request, res: Response) => {
@@ -4622,6 +4794,9 @@ app.put('/api/admin/branding', verifyAdmin, async (req: Request, res: Response) 
   db.save();
   await db.syncBrandSettingsDirect(state.brandSettings);
 
+  broadcastRealtimeEvent('BRANDING_UPDATED', state.brandSettings);
+  broadcastRealtimeEvent('STATE_UPDATED', { type: 'BRANDING_UPDATED' });
+
   res.json({ success: true, brandSettings: state.brandSettings });
 });
 
@@ -4798,11 +4973,110 @@ app.get('/api/admin/audit-logs', verifyAdmin, (req: Request, res: Response) => {
   res.json(state.auditLogs);
 });
 
+// Public Notifications API (Open to all storefront visitors)
+app.get('/api/public/notifications', (_req: Request, res: Response) => {
+  const state = db.getState();
+  const notifs = (state.notifications || []).filter(n => n.recipientRole === 'PUBLIC');
+
+  if (notifs.length === 0) {
+    const welcomeNotif: NotificationItem = {
+      id: 'notif-pub-welcome',
+      recipientRole: 'PUBLIC',
+      titleBn: state.brandSettings?.appName ? `স্বাগতম ${state.brandSettings.appName}-এ!` : 'স্বাগতম তাওযুন নেক্সাস-এ!',
+      titleEn: `Welcome to ${state.brandSettings?.appName || 'Tawzoon'}!`,
+      messageBn: state.brandSettings?.promoBannerTextBn || 'আমাদের ট্রেন্ডিং কালেকশন ও আকর্ষণীয় অফার উপভোগ করুন। শুভ কেনাকাটা!',
+      messageEn: 'Enjoy our trending collection and special offers. Happy shopping!',
+      type: 'ANNOUNCEMENT',
+      isRead: false,
+      createdAt: new Date().toISOString()
+    };
+    return res.json([welcomeNotif]);
+  }
+
+  res.json(notifs.slice(0, 50));
+});
+
 // Admin Notifications
 app.get('/api/admin/notifications', verifyAdmin, (req: Request, res: Response) => {
   const state = db.getState();
   const notifs = state.notifications.filter(n => n.recipientRole === 'ADMIN');
-  res.json(notifs);
+  res.json(notifs.slice(0, 50));
+});
+
+app.get('/api/admin/notifications/all', verifyAdmin, (_req: Request, res: Response) => {
+  const state = db.getState();
+  res.json((state.notifications || []).slice(0, 100));
+});
+
+app.post('/api/admin/notifications', verifyAdmin, (req: Request, res: Response) => {
+  const { recipientRole, titleBn, titleEn, messageBn, messageEn, type } = req.body;
+  if (!titleBn || !messageBn) {
+    return res.status(400).json({ error: 'titleBn and messageBn are required' });
+  }
+
+  const role = recipientRole || 'PUBLIC';
+  const createdNotifs: NotificationItem[] = [];
+
+  if (role === 'ALL') {
+    const publicNotif = db.addNotification({
+      recipientRole: 'PUBLIC',
+      titleBn: titleBn.trim(),
+      titleEn: (titleEn || titleBn).trim(),
+      messageBn: messageBn.trim(),
+      messageEn: (messageEn || messageBn).trim(),
+      type: (type as any) || 'ANNOUNCEMENT',
+    });
+    createdNotifs.push(publicNotif);
+    broadcastRealtimeEvent('NEW_NOTIFICATION', { notification: publicNotif, target: 'PUBLIC' });
+
+    const resellerNotif = db.addNotification({
+      recipientRole: 'EMPLOYEE',
+      titleBn: titleBn.trim(),
+      titleEn: (titleEn || titleBn).trim(),
+      messageBn: messageBn.trim(),
+      messageEn: (messageEn || messageBn).trim(),
+      type: (type as any) || 'ANNOUNCEMENT',
+    });
+    createdNotifs.push(resellerNotif);
+    broadcastRealtimeEvent('NEW_NOTIFICATION', { notification: resellerNotif, target: 'EMPLOYEE' });
+  } else {
+    const notif = db.addNotification({
+      recipientRole: role,
+      titleBn: titleBn.trim(),
+      titleEn: (titleEn || titleBn).trim(),
+      messageBn: messageBn.trim(),
+      messageEn: (messageEn || messageBn).trim(),
+      type: (type as any) || 'ANNOUNCEMENT',
+    });
+    createdNotifs.push(notif);
+    broadcastRealtimeEvent('NEW_NOTIFICATION', { notification: notif, target: role });
+  }
+
+  broadcastRealtimeEvent('STATE_UPDATED', { type: 'NOTIFICATION_ADDED' });
+
+  db.logAudit(
+    'NOTIFICATION_SENT',
+    AUTHORIZED_ADMIN_EMAIL,
+    `Target: ${role}`,
+    undefined,
+    titleBn,
+    getClientIp(req)
+  );
+
+  res.json({ success: true, notifications: createdNotifs });
+});
+
+app.patch('/api/admin/notifications/mark-all-read', verifyAdmin, (_req: Request, res: Response) => {
+  const state = db.getState();
+  let count = 0;
+  for (const n of state.notifications || []) {
+    if (n.recipientRole === 'ADMIN' && !n.isRead) {
+      n.isRead = true;
+      count++;
+    }
+  }
+  if (count > 0) db.save();
+  res.json({ success: true, count });
 });
 
 app.patch('/api/admin/notifications/:id/read', verifyAdmin, (req: Request, res: Response) => {
@@ -4813,6 +5087,18 @@ app.patch('/api/admin/notifications/:id/read', verifyAdmin, (req: Request, res: 
     db.save();
   }
   res.json({ success: true });
+});
+
+app.delete('/api/admin/notifications/:id', verifyAdmin, (req: Request, res: Response) => {
+  const state = db.getState();
+  const idx = (state.notifications || []).findIndex(n => n.id === req.params.id);
+  if (idx !== -1) {
+    state.notifications.splice(idx, 1);
+    db.save();
+    broadcastRealtimeEvent('STATE_UPDATED', { type: 'NOTIFICATION_DELETED', id: req.params.id });
+    return res.json({ success: true });
+  }
+  res.status(404).json({ error: 'Notification not found' });
 });
 
 // AI Chat Assistant Route using @google/genai (TAWZOON AI ASSISTANT: NATURAL LANGUAGE + PRIVATE RESELLER AGENT)

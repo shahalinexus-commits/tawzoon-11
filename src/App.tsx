@@ -35,7 +35,7 @@ const MainView: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen flex flex-col bg-white text-slate-900 font-sans selection:bg-slate-900 selection:text-white">
+    <div className="min-h-screen flex flex-col bg-white text-slate-900 font-sans selection:bg-emerald-200 selection:text-emerald-950">
       {/* Top Bar Navigation */}
       <Navbar />
 

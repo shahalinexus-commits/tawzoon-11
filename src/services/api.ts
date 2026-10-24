@@ -84,6 +84,9 @@ async function request<T>(endpoint: string, options: RequestInit = {}, retries =
 
 export const api = {
   // Public
+  publicGetNotifications: () =>
+    request<NotificationItem[]>('/api/public/notifications'),
+
   getBootstrap: () =>
     request<{
       brandSettings: BrandSettings;
@@ -338,6 +341,12 @@ export const api = {
 
   employeeMarkNotificationRead: (token: string, id: string) =>
     request<{ success: boolean }>(`/api/employee/notifications/${id}/read`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${token}` },
+    }),
+
+  employeeMarkAllNotificationsRead: (token: string) =>
+    request<{ success: boolean }>('/api/employee/notifications/mark-all-read', {
       method: 'PATCH',
       headers: { Authorization: `Bearer ${token}` },
     }),
@@ -765,6 +774,40 @@ export const api = {
 
   adminGetNotifications: (token: string) =>
     request<NotificationItem[]>('/api/admin/notifications', {
+      headers: { Authorization: `Bearer ${token}` },
+    }),
+
+  adminGetAllNotifications: (token: string) =>
+    request<NotificationItem[]>('/api/admin/notifications/all', {
+      headers: { Authorization: `Bearer ${token}` },
+    }),
+
+  adminSendNotification: (
+    token: string,
+    payload: {
+      recipientRole: 'PUBLIC' | 'EMPLOYEE' | 'ALL';
+      titleBn: string;
+      titleEn?: string;
+      messageBn: string;
+      messageEn?: string;
+      type?: string;
+    }
+  ) =>
+    request<{ success: boolean; notifications: NotificationItem[] }>('/api/admin/notifications', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify(payload),
+    }),
+
+  adminMarkAllNotificationsRead: (token: string) =>
+    request<{ success: boolean; count: number }>('/api/admin/notifications/mark-all-read', {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${token}` },
+    }),
+
+  adminDeleteNotification: (token: string, id: string) =>
+    request<{ success: boolean }>(`/api/admin/notifications/${id}`, {
+      method: 'DELETE',
       headers: { Authorization: `Bearer ${token}` },
     }),
 

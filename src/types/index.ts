@@ -242,10 +242,15 @@ export interface BrandSettings {
   promoBannerTextEn: string;
   promoBannerLink: string;
   whatsappNumber?: string;
+  publicContactNumber?: string;
+  helplinePhone?: string;
   telegramBotToken?: string;
   telegramChatId?: string;
-  helplinePhone?: string;
   publicNoticeText?: string;
+  // Reseller Panel Dedicated Contact Settings
+  resellerWhatsappNumber?: string;
+  resellerContactNumber?: string;
+  resellerHotlinePhone?: string;
   resellerTerms?: Array<{ id: string; title: string; desc: string; isWarning?: boolean }>;
   // Reseller Dashboard Banner Customization
   resellerBannerBadgeBn?: string;
@@ -300,13 +305,13 @@ export interface BrandSettings {
 
 export interface NotificationItem {
   id: string;
-  recipientRole: 'ADMIN' | 'EMPLOYEE';
+  recipientRole: 'ADMIN' | 'EMPLOYEE' | 'PUBLIC';
   employeeId?: string;
   titleBn: string;
   titleEn: string;
   messageBn: string;
   messageEn: string;
-  type: 'SALE' | 'EMPLOYEE' | 'WITHDRAWAL' | 'SYSTEM' | 'COMMISSION';
+  type: 'SALE' | 'EMPLOYEE' | 'WITHDRAWAL' | 'SYSTEM' | 'COMMISSION' | 'ANNOUNCEMENT';
   isRead: boolean;
   createdAt: string;
 }

@@ -50,7 +50,7 @@ export const BkashPaymentModal: React.FC<BkashPaymentModalProps> = ({
 
   const invoice = invoiceNumber || `INV-${Date.now().toString().slice(-6)}`;
   const merchantName = (brandSettings as any)?.name || (brandSettings as any)?.websiteName || 'TAWZOON NEXUS';
-  const merchantPhone = brandSettings?.resellerSubscriptionPaymentPhone || brandSettings?.whatsappNumber || '01700000000';
+  const merchantPhone = brandSettings?.resellerContactNumber || brandSettings?.resellerWhatsappNumber || brandSettings?.resellerHotlinePhone || brandSettings?.resellerSubscriptionPaymentPhone || brandSettings?.whatsappNumber || '01700000000';
 
   useEffect(() => {
     if (isOpen) {

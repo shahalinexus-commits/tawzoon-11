@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import {
   Bell,
   CheckCircle,
@@ -6,17 +6,20 @@ import {
   DollarSign,
   AlertCircle,
   Clock,
+  CheckCheck,
+  Megaphone,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext.js';
 import { api } from '../../services/api.js';
 import { NotificationItem } from '../../types/index.js';
+import { useRealtimeEvents } from '../../hooks/useRealtimeEvents.js';
 
 export const ResellerNotificationsTab: React.FC = () => {
   const { lang, employeeToken } = useApp();
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [loading, setLoading] = useState(false);
 
-  const fetchNotifs = async () => {
+  const fetchNotifs = useCallback(async () => {
     if (!employeeToken) return;
     setLoading(true);
     try {
@@ -27,34 +30,76 @@ export const ResellerNotificationsTab: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [employeeToken]);
 
   useEffect(() => {
     fetchNotifs();
-  }, [employeeToken]);
+  }, [fetchNotifs]);
+
+  // Real-time synchronization
+  useRealtimeEvents((event) => {
+    if (
+      event.type === 'NEW_NOTIFICATION' ||
+      event.type === 'NOTIFICATION_ADDED' ||
+      event.type === 'BRANDING_UPDATED' ||
+      (event.type === 'STATE_UPDATED' && (event.data?.type === 'NOTIFICATION_ADDED' || event.data?.type === 'BRANDING_UPDATED'))
+    ) {
+      fetchNotifs();
+    }
+  });
 
   const handleMarkAsRead = async (id: string) => {
     if (!employeeToken) return;
     try {
       await api.employeeMarkNotificationRead(employeeToken, id);
       setNotifications(prev => prev.map(n => n.id === id ? { ...n, isRead: true } : n));
+      window.dispatchEvent(new CustomEvent('tawzoon_notifications_updated'));
     } catch (err) {
       console.error('Failed to mark notification as read:', err);
     }
   };
 
+  const handleMarkAllAsRead = async () => {
+    if (!employeeToken) return;
+    try {
+      await api.employeeMarkAllNotificationsRead(employeeToken);
+      setNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
+      window.dispatchEvent(new CustomEvent('tawzoon_notifications_updated'));
+    } catch (err) {
+      console.error('Failed to mark all as read:', err);
+    }
+  };
+
+  const unreadCount = notifications.filter(n => !n.isRead).length;
+
   return (
-    <div className="bg-white border border-slate-200/80 rounded-2xl p-5 shadow-xs space-y-4">
-      <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+    <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-2xl p-5 shadow-xs space-y-4">
+      <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800 gap-3">
         <div className="flex items-center gap-2">
           <Bell className="w-4 h-4 text-[#009245]" />
-          <h2 className="text-base font-bold text-slate-900">
-            {lang === 'bn' ? 'রিসেলার নোটিফিকেশন' : 'Notifications & Announcements'}
+          <h2 className="text-base font-bold text-slate-900 dark:text-white">
+            {lang === 'bn' ? 'রিসেলার নোটিফিকেশন ও ঘোষণা' : 'Notifications & Announcements'}
           </h2>
         </div>
-        <span className="text-xs text-slate-500 font-semibold">
-          {notifications.filter(n => !n.isRead).length} {lang === 'bn' ? 'টি নতুন' : 'unread'}
-        </span>
+        
+        <div className="flex items-center gap-2">
+          {unreadCount > 0 && (
+            <span className="text-xs px-2.5 py-0.5 rounded-full bg-rose-50 text-[#e31b23] border border-rose-200 font-bold">
+              {unreadCount} {lang === 'bn' ? 'টি নতুন' : 'unread'}
+            </span>
+          )}
+
+          {unreadCount > 0 && (
+            <button
+              type="button"
+              onClick={handleMarkAllAsRead}
+              className="px-3 py-1 bg-emerald-50 hover:bg-emerald-100 text-[#009245] border border-emerald-200 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 cursor-pointer"
+            >
+              <CheckCheck className="w-3.5 h-3.5" />
+              <span>{lang === 'bn' ? 'সব পড়া হয়েছে' : 'Mark all read'}</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {loading ? (

@@ -14,10 +14,11 @@ export const ResellerSupportTab: React.FC = () => {
   const { lang, brandSettings } = useApp();
   const [openFaqIndex, setOpenFaqIndex] = useState<number | null>(0);
 
-  const whatsapp = brandSettings?.whatsappNumber || '01700000000';
-  const whatsappUrl = whatsapp.startsWith('http')
-    ? whatsapp
-    : `https://wa.me/${whatsapp.replace(/[^0-9]/g, '')}`;
+  const resellerWhatsapp = brandSettings?.resellerWhatsappNumber || brandSettings?.whatsappNumber || '01700000000';
+  const whatsappUrl = resellerWhatsapp.startsWith('http')
+    ? resellerWhatsapp
+    : `https://wa.me/${resellerWhatsapp.replace(/[^0-9]/g, '')}`;
+  const resellerPhone = brandSettings?.resellerHotlinePhone || brandSettings?.resellerContactNumber || brandSettings?.helplinePhone || '01700000000';
 
   const faqs = [
     {
@@ -85,7 +86,7 @@ export const ResellerSupportTab: React.FC = () => {
               {lang === 'bn' ? 'কল সেন্টার' : 'Helpline'}
             </span>
             <h3 className="text-sm font-bold text-slate-900 mt-0.5">
-              {brandSettings?.whatsappNumber || '01700-000000'}
+              {resellerPhone}
             </h3>
             <p className="text-xs text-slate-600 mt-1">
               {lang === 'bn' ? 'সকাল ৯টা থেকে রাত ১০টা পর্যন্ত সক্রিয়' : 'Active 9 AM to 10 PM daily'}

@@ -65,7 +65,7 @@ export const ProductDetailsPage: React.FC<ProductDetailsPageProps> = ({
   } = useApp();
 
   const publicWhatsapp = brandSettings?.whatsappNumber || employee?.phone || '01700000000';
-  const publicHelpline = brandSettings?.helplinePhone || employee?.phone || '01700000000';
+  const publicHelpline = brandSettings?.publicContactNumber || brandSettings?.helplinePhone || employee?.phone || '01700000000';
   const publicNotice = brandSettings?.publicNoticeText || 'অনুরোধ করা হচ্ছে: আপনি প্রোডাক্টটির ছবি ডাউনলোড করে বা লিংক কপি করে, আপনি যার পোস্টে বা লিংকে ক্লিক করে কিনতে এসেছেন তার সাথে কন্টাক্ট করে এগুলো তাকে পাঠিয়ে বলুন যে "এই পণ্যগুলো নেব"। তাহলে আপনার অর্ডারটি কনফার্ম হবে।';
 
   const [currentProduct, setCurrentProduct] = useState<Product>(product);
@@ -1059,8 +1059,13 @@ export const ProductDetailsPage: React.FC<ProductDetailsPageProps> = ({
                 <a
                   href={
                     publicWhatsapp.startsWith('http')
-                      ? publicWhatsapp
-                      : `https://wa.me/88${publicWhatsapp.replace(/[^0-9]/g, '')}?text=${encodeURIComponent(`আসসালামু আলাইকুম! আমি "${title}" (কোড: #${currentProduct.productCode}${selectedSize ? `, সাইজ: ${selectedSize}` : ''}) পণ্যটি অর্ডার করতে চাই।`)}`
+                      ? (publicWhatsapp.includes('text=') ? publicWhatsapp : `${publicWhatsapp}${publicWhatsapp.includes('?') ? '&' : '?'}text=${encodeURIComponent(`আসসালামু আলাইকুম! আমি "${title}" (কোড: #${currentProduct.productCode}${selectedSize ? `, সাইজ: ${selectedSize}` : ''}) পণ্যটি অর্ডার করতে চাই।`)}`)
+                      : `https://wa.me/${(() => {
+                          let digits = publicWhatsapp.replace(/[^0-9]/g, '');
+                          if (digits.startsWith('0')) return '88' + digits;
+                          if (!digits.startsWith('88') && digits.length === 10) return '88' + digits;
+                          return digits;
+                        })()}?text=${encodeURIComponent(`আসসালামু আলাইকুম! আমি "${title}" (কোড: #${currentProduct.productCode}${selectedSize ? `, সাইজ: ${selectedSize}` : ''}) পণ্যটি অর্ডার করতে চাই।`)}`
                   }
                   target="_blank"
                   rel="noopener noreferrer"

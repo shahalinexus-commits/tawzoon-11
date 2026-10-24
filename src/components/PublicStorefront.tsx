@@ -5,6 +5,7 @@ import { ProductCard } from './ProductCard.js';
 import { ShopCategoryPage, isCategoryMatch } from './ShopCategoryPage.js';
 import { ProductDetailsPage } from './ProductDetailsPage.js';
 import { ScrollReveal } from './common/ScrollReveal.js';
+import { PublicNotificationsView } from './public/PublicNotificationsView.js';
 import { Product } from '../types/index.js';
 import { api } from '../services/api.js';
 import { ShieldCheck, Truck, RotateCcw, Headphones, ArrowRight, SlidersHorizontal, ChevronRight, Shirt, Smartphone, Package, Heart, ChevronLeft, Home, Bell } from 'lucide-react';
@@ -92,6 +93,20 @@ export const PublicStorefront: React.FC = () => {
     setViewingProduct(null);
     fetchProducts(products.length > 0);
   }, [publicCategory, publicSearch, sortOrder, activeFilterTag, activePortal]);
+
+  // Listen for Home / Logo click navigation event to refresh storefront completely
+  useEffect(() => {
+    const handleNavHome = () => {
+      setSelectedSubCategory(null);
+      setViewingProduct(null);
+      setInPageTab('all');
+      setSortOrder('default');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      fetchProducts(true);
+    };
+    window.addEventListener('tawzoon_nav_home', handleNavHome);
+    return () => window.removeEventListener('tawzoon_nav_home', handleNavHome);
+  }, []);
 
   const currentCategoryObj = categories.find(c => c.slug.toLowerCase() === publicCategory.toLowerCase());
   const categoryProducts = publicCategory === 'wishlist'
@@ -232,42 +247,7 @@ export const PublicStorefront: React.FC = () => {
 
   // If notifications view is active
   if (publicCategory.toLowerCase() === 'notifications') {
-    return (
-      <div className="min-h-screen bg-[#fafaf9] text-slate-900 pb-24">
-        <div className="max-w-[800px] mx-auto px-3 sm:px-6 lg:px-8 pt-4 pb-8 space-y-4">
-          <div className="bg-white dark:bg-slate-900 py-3 px-4 rounded-2xl shadow-2xs border border-slate-200/90 dark:border-slate-800 flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2.5 min-w-0">
-              <button
-                onClick={() => {
-                  setPublicCategory('all');
-                  window.scrollTo({ top: 0, behavior: 'smooth' });
-                }}
-                className="px-3 py-1.5 text-xs font-bold text-slate-700 dark:text-slate-200 bg-slate-100 hover:bg-slate-200 rounded-xl inline-flex items-center gap-1.5 transition-all cursor-pointer"
-              >
-                <ChevronLeft className="w-3.5 h-3.5" />
-                <span>{lang === 'bn' ? 'ফিরে যান' : 'Back'}</span>
-              </button>
-              <h1 className="text-sm sm:text-base font-black text-slate-900 dark:text-white flex items-center gap-2">
-                <Bell className="w-4 h-4 text-[#009245]" />
-                <span>{lang === 'bn' ? 'নোটিফিকেশন সমূহ' : 'Notifications'}</span>
-              </h1>
-            </div>
-          </div>
-
-          <div className="bg-white border border-slate-200/80 rounded-2xl p-12 text-center space-y-3">
-            <div className="w-14 h-14 rounded-2xl bg-emerald-50 text-emerald-600 mx-auto flex items-center justify-center">
-              <Bell className="w-7 h-7" />
-            </div>
-            <h3 className="text-base sm:text-lg font-bold text-slate-900">
-              {lang === 'bn' ? 'কোনো নোটিফিকেশন নেই' : 'No notifications'}
-            </h3>
-            <p className="text-xs sm:text-sm text-slate-500 max-w-sm mx-auto">
-              {lang === 'bn' ? 'আপনার জন্য বর্তমানে কোনো নতুন নোটিফিকেশন বা আপডেট নেই।' : 'You have no new notifications or updates at the moment.'}
-            </p>
-          </div>
-        </div>
-      </div>
-    );
+    return <PublicNotificationsView />;
   }
 
   // If any specific category, shop_tab, OR active search is present, render the dedicated Category Page!

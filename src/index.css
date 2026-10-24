@@ -29,6 +29,27 @@ body::-webkit-scrollbar {
   box-sizing: border-box;
 }
 
+/* Professional Text Selection Styling */
+::selection {
+  background-color: #a7f3d0 !important;
+  color: #064e3b !important;
+}
+
+::-moz-selection {
+  background-color: #a7f3d0 !important;
+  color: #064e3b !important;
+}
+
+.dark ::selection {
+  background-color: #065f46 !important;
+  color: #ecfdf5 !important;
+}
+
+.dark ::-moz-selection {
+  background-color: #065f46 !important;
+  color: #ecfdf5 !important;
+}
+
 img, video, canvas, svg {
   max-width: 100%;
   height: auto;
